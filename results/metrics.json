@@ -1,0 +1,406 @@
+{
+  "discrete": {
+    "summary": {
+      "tf_hop1_acc": 0.45588235294117646,
+      "tf_hop2_acc": 0.8578431372549019,
+      "tf_hop3_acc": 0.5784313725490197,
+      "tf_exact": 0.23039215686274508,
+      "tf_later_acc": 0.7867647058823529,
+      "tf_later_wall_acc": 0.6666666666666666,
+      "tf_hop2_wall": 0.8578431372549019,
+      "tf_valid": 0.5,
+      "tf_pred_nbounces": 1.9313725490196079,
+      "tf_any_scene_path": 0.5,
+      "tf_xy_mean": 0.0750257343002141,
+      "freerun_hop1_acc": 0.45588235294117646,
+      "freerun_hop2_acc": 0.45098039215686275,
+      "freerun_hop3_acc": 0.5686274509803921,
+      "freerun_exact": 0.23039215686274508,
+      "freerun_later_acc": 0.4746732026143791,
+      "freerun_later_wall_acc": 0.34558823529411764,
+      "freerun_hop2_wall": 0.45098039215686275,
+      "freerun_valid": 0.9558823529411765,
+      "freerun_pred_nbounces": 1.9362745098039216,
+      "freerun_any_scene_path": 0.9558823529411765,
+      "freerun_xy_hop1": 0.1539923044167969,
+      "freerun_xy_hop2": 0.17370535703151732,
+      "freerun_xy_hop3": 0.0553916451666439,
+      "freerun_xy_mean": 0.128811012677106,
+      "oracle_first_hop1_acc": 1.0,
+      "oracle_first_hop2_acc": 0.8578431372549019,
+      "oracle_first_hop3_acc": 0.5294117647058824,
+      "oracle_first_exact": 0.46078431372549017,
+      "oracle_first_later_acc": 0.6299019607843137,
+      "oracle_first_later_wall_acc": 0.6666666666666666,
+      "oracle_first_hop2_wall": 0.8578431372549019,
+      "oracle_first_valid": 0.9607843137254902,
+      "oracle_first_pred_nbounces": 1.9656862745098038,
+      "oracle_first_any_scene_path": 0.9509803921568627,
+      "oracle_first_xy_hop1": 0.02865285607977427,
+      "oracle_first_xy_hop2": 0.0737228314589021,
+      "oracle_first_xy_hop3": 0.06049276896572664,
+      "oracle_first_xy_mean": 0.05528328772370505,
+      "interv_2nd_hop1_acc": 0.0,
+      "interv_2nd_hop2_acc": 0.0196078431372549,
+      "interv_2nd_hop3_acc": 0.553921568627451,
+      "interv_2nd_exact": 0.0,
+      "interv_2nd_later_acc": 0.2916666666666667,
+      "interv_2nd_later_wall_acc": 0.014705882352941176,
+      "interv_2nd_hop2_wall": 0.0196078431372549,
+      "interv_2nd_valid": 0.9558823529411765,
+      "interv_2nd_pred_nbounces": 1.9705882352941178,
+      "interv_2nd_any_scene_path": 0.9411764705882353,
+      "interv_2nd_xy_hop1": 0.268349551706524,
+      "interv_2nd_xy_hop2": 0.27439813383872874,
+      "interv_2nd_xy_hop3": 0.06350128801343739,
+      "interv_2nd_xy_mean": 0.20104132181443926,
+      "interv_rand_hop1_acc": 0.0,
+      "interv_rand_hop2_acc": 0.35784313725490197,
+      "interv_rand_hop3_acc": 0.29411764705882354,
+      "interv_rand_exact": 0.0,
+      "interv_rand_later_acc": 0.34558823529411764,
+      "interv_rand_later_wall_acc": 0.3137254901960784,
+      "interv_rand_hop2_wall": 0.35784313725490197,
+      "interv_rand_valid": 0.14705882352941177,
+      "interv_rand_pred_nbounces": 2.269607843137255,
+      "interv_rand_any_scene_path": 0.14705882352941177,
+      "interv_rand_xy_mean": 0.24244648500898006,
+      "oneshot_hop1_acc": 0.46568627450980393,
+      "oneshot_hop2_acc": 0.00980392156862745,
+      "oneshot_hop3_acc": 0.014705882352941176,
+      "oneshot_exact": 0.004901960784313725,
+      "oneshot_later_acc": 0.011437908496732025,
+      "oneshot_later_wall_acc": 0.007352941176470588,
+      "oneshot_hop2_wall": 0.00980392156862745,
+      "oneshot_valid": 0.9852941176470589,
+      "oneshot_pred_nbounces": 0.9901960784313726,
+      "oneshot_any_scene_path": 0.9852941176470589,
+      "oneshot_xy_hop1": 0.21625489616982366,
+      "oneshot_xy_hop2": 0.21493639359657124,
+      "oneshot_xy_mean": 0.21527827837717187,
+      "oneshot_interv_hop1_acc": 0.0,
+      "oneshot_interv_hop2_acc": 0.00980392156862745,
+      "oneshot_interv_hop3_acc": 0.014705882352941176,
+      "oneshot_interv_exact": 0.0,
+      "oneshot_interv_later_acc": 0.011437908496732025,
+      "oneshot_interv_later_wall_acc": 0.007352941176470588,
+      "oneshot_interv_hop2_wall": 0.00980392156862745,
+      "oneshot_interv_valid": 0.946078431372549,
+      "oneshot_interv_pred_nbounces": 0.9950980392156863,
+      "oneshot_interv_any_scene_path": 0.946078431372549,
+      "oneshot_interv_xy_hop1": 0.29732670809020706,
+      "oneshot_interv_xy_hop2": 0.21337644364975283,
+      "oneshot_interv_xy_mean": 0.2542069271551999,
+      "first_token_tf": 0.45588235294117646,
+      "first_token_free": 0.45588235294117646,
+      "first_token_oneshot": 0.46568627450980393,
+      "tf_xy_hop1": 0.05775567316523188,
+      "tf_xy_hop2": 0.07882038618428067,
+      "tf_xy_hop3": 0.060861857146726456,
+      "tf_hop4_acc": 1.0,
+      "freerun_hop4_acc": 0.0,
+      "oracle_first_hop4_acc": 0.024096385542168676,
+      "interv_2nd_hop4_acc": 0.04819277108433735,
+      "interv_rand_hop4_acc": 0.43373493975903615,
+      "oneshot_hop4_acc": 0.0,
+      "oneshot_interv_hop4_acc": 0.0,
+      "interv_rand_xy_hop1": 0.3241475770287917,
+      "interv_rand_xy_hop2": 0.25646431600700753,
+      "interv_rand_xy_hop3": 0.09095830619154086,
+      "oneshot_xy_hop3": 0.06539739801929897,
+      "oneshot_interv_xy_hop3": 0.07427519280377878,
+      "interv_2nd_xy_hop4": 0.0,
+      "oracle_first_xy_hop4": 0.0,
+      "interv_rand_xy_hop4": 0.0,
+      "n_eval": 204,
+      "mean_n_bounces": 2.406862745098039
+    },
+    "hop_table": {
+      "tf": {
+        "exact": 0.23039215686274508,
+        "valid": 0.5,
+        "later_acc": 0.7867647058823529,
+        "later_wall_acc": 0.6666666666666666,
+        "hop2_wall": 0.8578431372549019,
+        "any_scene_path": 0.5,
+        "pred_nbounces": 1.9313725490196079,
+        "xy_mean": 0.0750257343002141,
+        "hops": [
+          0.45588235294117646,
+          0.8578431372549019,
+          0.5784313725490197,
+          1.0
+        ],
+        "xy_hops": [
+          0.05775567316523188,
+          0.07882038618428067,
+          0.060861857146726456,
+          null
+        ]
+      },
+      "freerun": {
+        "exact": 0.23039215686274508,
+        "valid": 0.9558823529411765,
+        "later_acc": 0.4746732026143791,
+        "later_wall_acc": 0.34558823529411764,
+        "hop2_wall": 0.45098039215686275,
+        "any_scene_path": 0.9558823529411765,
+        "pred_nbounces": 1.9362745098039216,
+        "xy_mean": 0.128811012677106,
+        "hops": [
+          0.45588235294117646,
+          0.45098039215686275,
+          0.5686274509803921,
+          0.0
+        ],
+        "xy_hops": [
+          0.1539923044167969,
+          0.17370535703151732,
+          0.0553916451666439,
+          null
+        ]
+      },
+      "oracle_first": {
+        "exact": 0.46078431372549017,
+        "valid": 0.9607843137254902,
+        "later_acc": 0.6299019607843137,
+        "later_wall_acc": 0.6666666666666666,
+        "hop2_wall": 0.8578431372549019,
+        "any_scene_path": 0.9509803921568627,
+        "pred_nbounces": 1.9656862745098038,
+        "xy_mean": 0.05528328772370505,
+        "hops": [
+          1.0,
+          0.8578431372549019,
+          0.5294117647058824,
+          0.024096385542168676
+        ],
+        "xy_hops": [
+          0.02865285607977427,
+          0.0737228314589021,
+          0.06049276896572664,
+          0.0
+        ]
+      },
+      "interv_2nd": {
+        "exact": 0.0,
+        "valid": 0.9558823529411765,
+        "later_acc": 0.2916666666666667,
+        "later_wall_acc": 0.014705882352941176,
+        "hop2_wall": 0.0196078431372549,
+        "any_scene_path": 0.9411764705882353,
+        "pred_nbounces": 1.9705882352941178,
+        "xy_mean": 0.20104132181443926,
+        "hops": [
+          0.0,
+          0.0196078431372549,
+          0.553921568627451,
+          0.04819277108433735
+        ],
+        "xy_hops": [
+          0.268349551706524,
+          0.27439813383872874,
+          0.06350128801343739,
+          0.0
+        ]
+      },
+      "interv_rand": {
+        "exact": 0.0,
+        "valid": 0.14705882352941177,
+        "later_acc": 0.34558823529411764,
+        "later_wall_acc": 0.3137254901960784,
+        "hop2_wall": 0.35784313725490197,
+        "any_scene_path": 0.14705882352941177,
+        "pred_nbounces": 2.269607843137255,
+        "xy_mean": 0.24244648500898006,
+        "hops": [
+          0.0,
+          0.35784313725490197,
+          0.29411764705882354,
+          0.43373493975903615
+        ],
+        "xy_hops": [
+          0.3241475770287917,
+          0.25646431600700753,
+          0.09095830619154086,
+          0.0
+        ]
+      },
+      "oneshot": {
+        "exact": 0.004901960784313725,
+        "valid": 0.9852941176470589,
+        "later_acc": 0.011437908496732025,
+        "later_wall_acc": 0.007352941176470588,
+        "hop2_wall": 0.00980392156862745,
+        "any_scene_path": 0.9852941176470589,
+        "pred_nbounces": 0.9901960784313726,
+        "xy_mean": 0.21527827837717187,
+        "hops": [
+          0.46568627450980393,
+          0.00980392156862745,
+          0.014705882352941176,
+          0.0
+        ],
+        "xy_hops": [
+          0.21625489616982366,
+          0.21493639359657124,
+          0.06539739801929897,
+          null
+        ]
+      },
+      "oneshot_interv": {
+        "exact": 0.0,
+        "valid": 0.946078431372549,
+        "later_acc": 0.011437908496732025,
+        "later_wall_acc": 0.007352941176470588,
+        "hop2_wall": 0.00980392156862745,
+        "any_scene_path": 0.946078431372549,
+        "pred_nbounces": 0.9950980392156863,
+        "xy_mean": 0.2542069271551999,
+        "hops": [
+          0.0,
+          0.00980392156862745,
+          0.014705882352941176,
+          0.0
+        ],
+        "xy_hops": [
+          0.29732670809020706,
+          0.21337644364975283,
+          0.07427519280377878,
+          null
+        ]
+      }
+    },
+    "examples": [
+      {
+        "scene_id": 20000,
+        "path_id": 3,
+        "gt": [
+          "TX",
+          "wall_1",
+          "wall_4",
+          "RX"
+        ]
+      },
+      {
+        "scene_id": 20000,
+        "path_id": 4,
+        "gt": [
+          "TX",
+          "wall_4",
+          "wall_1",
+          "RX"
+        ]
+      },
+      {
+        "scene_id": 20000,
+        "path_id": 5,
+        "gt": [
+          "TX",
+          "wall_1",
+          "wall_4",
+          "wall_1",
+          "RX"
+        ]
+      },
+      {
+        "scene_id": 20000,
+        "path_id": 6,
+        "gt": [
+          "TX",
+          "wall_4",
+          "wall_1",
+          "wall_4",
+          "RX"
+        ]
+      },
+      {
+        "scene_id": 20001,
+        "path_id": 4,
+        "gt": [
+          "TX",
+          "wall_1",
+          "wall_4",
+          "RX"
+        ]
+      },
+      {
+        "scene_id": 20001,
+        "path_id": 5,
+        "gt": [
+          "TX",
+          "wall_1",
+          "wall_10",
+          "RX"
+        ]
+      },
+      {
+        "scene_id": 20001,
+        "path_id": 6,
+        "gt": [
+          "TX",
+          "wall_4",
+          "wall_1",
+          "RX"
+        ]
+      },
+      {
+        "scene_id": 20001,
+        "path_id": 7,
+        "gt": [
+          "TX",
+          "wall_4",
+          "wall_1",
+          "wall_4",
+          "RX"
+        ]
+      }
+    ]
+  },
+  "continuous": {
+    "joint_t_hop1": 0.09772737474595926,
+    "joint_xy_hop1": 0.0490430315649726,
+    "ar_free_t_hop1": 0.1298326781266425,
+    "ar_free_xy_hop1": 0.07301460088831233,
+    "ar_badt0_t_hop1": 0.2711768905261913,
+    "ar_badt0_xy_hop1": 0.18010735784068752,
+    "ddpm_t_hop1": 0.2584475865026554,
+    "ddpm_xy_hop1": 0.1662431397515167,
+    "ddpm_freeze_t0_t_hop1": 0.2711768905261913,
+    "ddpm_freeze_t0_xy_hop1": 0.18010735784068752,
+    "oracle_t_hop1": 9.15589243509585e-09,
+    "oracle_xy_hop1": 0.0,
+    "t0_corruption": 0.2711768905261913,
+    "joint_t_hop2": 0.06691674413342102,
+    "joint_xy_hop2": 0.035411723547747034,
+    "joint_later_xy": 0.035352981096308904,
+    "ar_free_t_hop2": 0.09939922567676096,
+    "ar_free_xy_hop2": 0.059780461995524586,
+    "ar_free_later_xy": 0.048838153096929876,
+    "ar_badt0_t_hop2": 0.11448171902813163,
+    "ar_badt0_xy_hop2": 0.06946022734408405,
+    "ar_badt0_later_xy": 0.05341930369912361,
+    "ddpm_t_hop2": 0.2575601108518301,
+    "ddpm_xy_hop2": 0.17125407244508103,
+    "ddpm_later_xy": 0.17380180177498614,
+    "ddpm_freeze_t0_t_hop2": 0.237608766658049,
+    "ddpm_freeze_t0_xy_hop2": 0.15990992126024595,
+    "ddpm_freeze_t0_later_xy": 0.15513120858515586,
+    "oracle_t_hop2": 1.2350963797454452e-08,
+    "oracle_xy_hop2": 0.0,
+    "joint_t_hop3": 0.05547221130635365,
+    "joint_xy_hop3": 0.02720769028738241,
+    "ar_free_t_hop3": 0.05844037468174854,
+    "ar_free_xy_hop3": 0.02828138304093596,
+    "ar_badt0_t_hop3": 0.06419385161744542,
+    "ar_badt0_xy_hop3": 0.03332079885600111,
+    "ddpm_t_hop3": 0.2609135667423168,
+    "ddpm_xy_hop3": 0.1748006771565165,
+    "ddpm_freeze_t0_t_hop3": 0.2172196347670383,
+    "ddpm_freeze_t0_xy_hop3": 0.14880739677892166,
+    "oracle_t_hop3": 1.5477651055050586e-08,
+    "oracle_xy_hop3": 0.0,
+    "n_eval": 332
+  },
+  "findings": "结论（n=204 条测试路径，n_bounces≥2；数字来自本次 toy run，不是预设口号）：\n\n### 离散交互序列\n- 第一跳（相对「这一条」GT 路径）准确率只有 0.456。同一 Tx/Rx 通常有多条合法 IRT 分支，普通 AR 被训练成对准单条标注路径，第一跳本身就不是唯一 next-token。\n- Teacher-forcing 第二墙 0.858；free-run 第二墙掉到 0.451（给定自己的第一跳后续开始偏）。exact 0.230。\n- **Oracle 第一墙 + AR 其余**：第二墙 0.858，后续墙 0.667，整段 exact 0.461。\n- **把第一跳改成模型第二候选再 AR**：第二墙 0.020，后续墙 0.015，exact 0.000。\n  几何合法率仍有 0.956（与 free-run 0.956 接近），且 0.941 落在该场景已枚举的某条 GT 分支上——说明第二候选往往是树上的另一枝，而不是「同一条序列的局部噪声」。\n- **把第一跳改成随机墙再 AR**：合法率从 0.956 掉到 0.147，落到场景 GT 分支的比例 0.147，exact 0.000。离开可见性树后，后续 next-token 几乎拼不出镜面路径。\n- One-shot 非 AR：exact 0.005，后续墙几乎对不上这条多跳 GT，但合法率 0.985（常退化成短的 1-bounce/LoS 合法枝）。\n\n### 连续交互点（离散墙序列给定）\n- 镜像法 oracle 第一跳点误差 0.00e+00（几何闭合）。离散结构已知时，连续点不该再当开放的 AR 序列来猜。\n- 联合回归 hop1 xy 0.049，后续 0.035；AR-t free-run 后续 0.049；污染 t0 后再 AR 后续 0.053。\n- 本玩具里的小 DDPM 后续误差 0.174，没有超过联合回归（CPU 小组件、步数少）。它只用来表明：连续几何应联合生成，而不是逐步 AR；不声称复现 RadioDiff。\n\n### 对研究问题的回答\n**不适合把传播路径直接当成普通 autoregressive sequence 来生成。**\nWinProp IRT 的对象是「可见性树上的短深度搜索 + 元件上的连续点」。本实验里：\n1. 第一交互是分支选择，不是局部 token；改错第一跳后，相对原 GT 的后续墙准确率崩掉；\n2. 若错误第一跳仍落在树上（模型第二候选），可以走出另一条合法路径，但这是换枝，不是 AR 纠错；\n3. 若第一跳是随机墙（离开树），几何合法率崩溃；\n4. 连续点在离散结构给定后由镜像法决定，联合回归/生成比逐步 AR 更合适。\n模型不必优于所有 baseline；one-shot 与 oracle-first 只是「更少 AR」和「第一跳被纠正」的对照。"
+}

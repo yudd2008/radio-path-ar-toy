@@ -83,7 +83,7 @@ def save_scene_paths(
         ax.set_title(title, fontsize=10)
     handles, labels = ax.get_legend_handles_labels()
     if labels:
-        ax.legend(loc="upper right", fontsize=7, framealpha=0.9)
+        ax.legend(loc="best", fontsize=7, framealpha=0.88, borderpad=0.3)
     ax.set_xlabel("x")
     ax.set_ylabel("y")
     fig.tight_layout()

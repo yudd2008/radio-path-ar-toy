@@ -12,7 +12,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from data.generate import generate_dataset
-from env.scene import Scene, random_scene
+from env.scene import random_canyon_scene
 from env.viz import save_scene_paths
 from experiments.ar_intervention import run_experiment
 from experiments.common import seed_all
@@ -23,8 +23,8 @@ from pathfind.image_method import find_paths
 
 def demo_gt_figure(seed: int, out: Path) -> None:
     rng = __import__("numpy").random.default_rng(seed)
-    for k in range(40):
-        scene = random_scene(rng, n_rects=3, scene_id=k)
+    for k in range(80):
+        scene = random_canyon_scene(rng, scene_id=k)
         if scene is None:
             continue
         paths = find_paths(scene, max_bounces=3, max_paths=6)
@@ -32,7 +32,7 @@ def demo_gt_figure(seed: int, out: Path) -> None:
         if not bounce:
             continue
         recs = [
-            {"points": p.points, "label": f"{p.n_bounces}-bounce {p.tokens}"}
+            {"points": p.points, "label": f"{p.n_bounces}-bounce {p.wall_ids}"}
             for p in paths[:4]
         ]
         save_scene_paths(

@@ -59,6 +59,21 @@ def _load_oneshot(ckpt: Path) -> OneShotPathModel:
     return m
 
 
+def _jsonable(x):
+    if isinstance(x, dict):
+        return {str(k): _jsonable(v) for k, v in x.items()}
+    if isinstance(x, (list, tuple)):
+        return [_jsonable(v) for v in x]
+    if isinstance(x, (np.floating, float)):
+        v = float(x)
+        if v != v or v in (float("inf"), float("-inf")):
+            return None
+        return v
+    if isinstance(x, (np.integer,)):
+        return int(x)
+    return x
+
+
 def _mean(xs) -> float:
     xs = [float(x) for x in xs if x == x]  # drop nan
     return float(np.mean(xs)) if xs else float("nan")
@@ -125,6 +140,10 @@ def eval_discrete(ar, oneshot, loader, json_index, rng, fig_dir: Path) -> dict:
     stats = defaultdict(list)
     examples = []
     n_plot = 0
+    scene_path_set: dict[int, set[tuple[int, ...]]] = defaultdict(set)
+    for rec in json_index.values():
+        scene_path_set[int(rec["scene_id"])].add(tuple(int(w) for w in rec["wall_ids"]))
+
     for batch in loader:
         bsz = batch["tokens"].size(0)
         tokens = batch["tokens"]
@@ -204,11 +223,18 @@ def eval_discrete(ar, oneshot, loader, json_index, rng, fig_dir: Path) -> dict:
                 for k, f in enumerate(flags, start=1):
                     stats[f"{tag}_hop{k}_acc"].append(f)
                 stats[f"{tag}_exact"].append(int(np.array_equal(pred_seq[: n_tgt + 1], gt[: n_tgt + 1])))
-                later = flags[start_hop:]  # hops after first interaction
+                later = flags[start_hop:]  # hops after first interaction (may include RX)
                 if later:
                     stats[f"{tag}_later_acc"].append(float(np.mean(later)))
+                # Subsequent *walls only* (exclude the easy terminal RX).
+                if nb >= 2 and len(flags) >= 2:
+                    stats[f"{tag}_later_wall_acc"].append(float(np.mean(flags[1:nb])))
+                if nb >= 2 and len(flags) >= 2:
+                    stats[f"{tag}_hop2_wall"].append(float(flags[1]))
                 valid, pts, wids = validity_and_points(scene, pred_seq)
                 stats[f"{tag}_valid"].append(int(valid))
+                stats[f"{tag}_pred_nbounces"].append(len(wids))
+                stats[f"{tag}_any_scene_path"].append(int(tuple(wids) in scene_path_set[sid]))
                 if pts is not None:
                     n = min(len(pts), len(gt_pts))
                     err = [float(np.linalg.norm(pts[j] - gt_pts[j])) for j in range(1, n)]
@@ -239,8 +265,8 @@ def eval_discrete(ar, oneshot, loader, json_index, rng, fig_dir: Path) -> dict:
             stats["n_bounces"].append(nb)
 
             if n_plot < 8 and nb >= 2:
-                _, free_pts, _, _ = validity_and_points(scene, _as_numpy_seq(free[i]))
-                _, iv_pts, _, _ = validity_and_points(scene, _as_numpy_seq(interv[i]))
+                _, free_pts, _ = validity_and_points(scene, _as_numpy_seq(free[i]))
+                _, iv_pts, _ = validity_and_points(scene, _as_numpy_seq(interv[i]))
                 paths = [{"points": gt_pts, "label": "GT"}]
                 if free_pts is not None:
                     paths.append({"points": free_pts, "label": "AR free-run"})
@@ -277,6 +303,10 @@ def eval_discrete(ar, oneshot, loader, json_index, rng, fig_dir: Path) -> dict:
             "exact": summary.get(f"{tag}_exact", float("nan")),
             "valid": summary.get(f"{tag}_valid", float("nan")),
             "later_acc": summary.get(f"{tag}_later_acc", float("nan")),
+            "later_wall_acc": summary.get(f"{tag}_later_wall_acc", float("nan")),
+            "hop2_wall": summary.get(f"{tag}_hop2_wall", float("nan")),
+            "any_scene_path": summary.get(f"{tag}_any_scene_path", float("nan")),
+            "pred_nbounces": summary.get(f"{tag}_pred_nbounces", float("nan")),
             "xy_mean": summary.get(f"{tag}_xy_mean", float("nan")),
             "hops": [summary.get(f"{tag}_hop{k}_acc", float("nan")) for k in range(1, MAX_BOUNCES + 2)],
             "xy_hops": [summary.get(f"{tag}_xy_hop{k}", float("nan")) for k in range(1, MAX_BOUNCES + 2)],
@@ -402,43 +432,44 @@ def make_plots(discrete: dict, continuous: dict, out_dir: Path) -> None:
     import matplotlib.pyplot as plt
 
     hop_table = discrete["hop_table"]
-    hops = np.arange(1, MAX_BOUNCES + 2)
     labels = {
         "tf": "AR teacher-force",
         "freerun": "AR free-run",
         "oracle_first": "oracle 1st + AR rest",
         "interv_2nd": "wrong 1st (2nd-best) + AR",
+        "interv_rand": "wrong 1st (random wall) + AR",
         "oneshot": "one-shot (non-AR)",
         "oneshot_interv": "one-shot, overwrite 1st",
     }
-    fig, ax = plt.subplots(figsize=(7.2, 4.2))
+    fig, ax = plt.subplots(figsize=(7.6, 4.3))
     for tag, lab in labels.items():
-        ys = hop_table[tag]["hops"]
-        ax.plot(hops[: len(ys)], ys, marker="o", label=lab)
-    ax.set_xlabel("sequence hop after Tx (1 = first wall, last often Rx)")
-    ax.set_ylabel("token accuracy vs GT path")
+        ys = hop_table[tag]["hops"][:3]
+        ax.plot(np.arange(1, len(ys) + 1), ys, marker="o", label=lab)
+    ax.set_xlabel("sequence hop after Tx (1 = first wall, 2 = second wall, 3 often Rx)")
+    ax.set_ylabel("token accuracy vs this GT path")
     ax.set_ylim(-0.05, 1.05)
+    ax.set_xticks([1, 2, 3])
     ax.grid(True, alpha=0.3)
-    ax.legend(fontsize=8)
+    ax.legend(fontsize=7.5)
     ax.set_title("Discrete path: teacher-forcing vs free-run vs first-token intervention")
     fig.tight_layout()
     fig.savefig(out_dir / "discrete_hop_accuracy.png", dpi=140)
     plt.close(fig)
 
-    # bar: exact / valid
-    fig, ax = plt.subplots(figsize=(7.4, 4.0))
-    tags = list(labels)
+    # bar: exact / valid  — skip stitched teacher-force (not a decoded path)
+    fig, ax = plt.subplots(figsize=(8.0, 4.2))
+    tags = [t for t in labels if t != "tf"]
     x = np.arange(len(tags))
     exact = [hop_table[t]["exact"] for t in tags]
     valid = [hop_table[t]["valid"] for t in tags]
     ax.bar(x - 0.18, exact, 0.36, label="exact match vs this GT path")
     ax.bar(x + 0.18, valid, 0.36, label="geometrically valid specular path")
     ax.set_xticks(x)
-    ax.set_xticklabels([labels[t] for t in tags], rotation=25, ha="right", fontsize=8)
+    ax.set_xticklabels([labels[t] for t in tags], rotation=28, ha="right", fontsize=8)
     ax.set_ylim(0, 1.05)
     ax.set_ylabel("rate")
     ax.legend(fontsize=8)
-    ax.set_title("Exact GT match vs geometric validity (a valid other IRT branch still counts)")
+    ax.set_title("Exact GT match vs geometric validity (another IRT branch still counts as valid)")
     fig.tight_layout()
     fig.savefig(out_dir / "discrete_exact_valid.png", dpi=140)
     plt.close(fig)
@@ -468,35 +499,57 @@ def make_plots(discrete: dict, continuous: dict, out_dir: Path) -> None:
 
 def write_findings(discrete: dict, continuous: dict, out_dir: Path) -> str:
     ht = discrete["hop_table"]
-    later_ar = ht["interv_2nd"]["later_acc"]
-    later_oracle = ht["oracle_first"]["later_acc"]
-    later_os = ht["oneshot_interv"]["later_acc"]
+    n_eval = discrete["summary"].get("n_eval", float("nan"))
+    hop1_tf = ht["tf"]["hops"][0]
+    hop2_tf = ht["tf"]["hops"][1]
+    hop2_free = ht["freerun"]["hops"][1]
+    hop2_oracle = ht["oracle_first"]["hops"][1]
+    hop2_2nd = ht["interv_2nd"]["hops"][1]
+    later_w_oracle = ht["oracle_first"]["later_wall_acc"]
+    later_w_2nd = ht["interv_2nd"]["later_wall_acc"]
+    exact_free = ht["freerun"]["exact"]
+    exact_oracle = ht["oracle_first"]["exact"]
+    exact_2nd = ht["interv_2nd"]["exact"]
+    exact_rand = ht["interv_rand"]["exact"]
+    exact_os = ht["oneshot"]["exact"]
     valid_free = ht["freerun"]["valid"]
-    valid_int = ht["interv_2nd"]["valid"]
-    tf_h1 = ht["tf"]["hops"][0]
-    free_h1 = ht["freerun"]["hops"][0]
+    valid_2nd = ht["interv_2nd"]["valid"]
+    valid_rand = ht["interv_rand"]["valid"]
+    valid_os = ht["oneshot"]["valid"]
+    any_2nd = ht["interv_2nd"]["any_scene_path"]
+    any_rand = ht["interv_rand"]["any_scene_path"]
     oracle_xy = continuous.get("oracle_xy_hop1", float("nan"))
     ar_later = continuous.get("ar_badt0_later_xy", float("nan"))
     joint_later = continuous.get("joint_later_xy", float("nan"))
+    ar_free_xy = continuous.get("ar_free_later_xy", float("nan"))
+    ddpm_xy = continuous.get("ddpm_later_xy", float("nan"))
+    joint_h1 = continuous.get("joint_xy_hop1", float("nan"))
 
-    # Honest conclusion from the measured numbers.
-    degrade = (later_oracle - later_ar) if (later_oracle == later_oracle and later_ar == later_ar) else float("nan")
     lines = [
-        "结论（由本玩具实验的测量值得出，不是预设口号）：",
+        f"结论（n={int(n_eval)} 条测试路径，n_bounces≥2；数字来自本次 toy run，不是预设口号）：",
         "",
-        f"- Teacher-forcing 第一跳准确率 {tf_h1:.3f}，free-run 第一跳 {free_h1:.3f}。",
-        f"- 给定 GT 第一墙后 AR 续写（oracle first）后续 token 准确率 {later_oracle:.3f}；",
-        f"  把第一跳改成模型第二候选后再 AR，后续准确率掉到 {later_ar:.3f}（Δ={degrade:.3f}）。",
-        f"- Free-run 序列成为*某条*合法镜面路径的比例 {valid_free:.3f}；错误第一跳之后只剩 {valid_int:.3f}。",
-        f"- One-shot 改写第一跳后，后续 hop 准确率 {later_os:.3f}（后续槽位本就不依赖第一跳，因此不会出现 AR 式累积，但也无法用第一跳约束后面的墙）。",
-        f"- 若离散墙序列已知，image method 第一跳点误差 {oracle_xy:.2e}（几何闭合）；",
-        f"  AR 连续头在 t0 被污染后后续点 xy 误差 {ar_later:.3f}，联合回归后续误差 {joint_later:.3f}。",
+        "### 离散交互序列",
+        f"- 第一跳（相对「这一条」GT 路径）准确率只有 {hop1_tf:.3f}。同一 Tx/Rx 通常有多条合法 IRT 分支，普通 AR 被训练成对准单条标注路径，第一跳本身就不是唯一 next-token。",
+        f"- Teacher-forcing 第二墙 {hop2_tf:.3f}；free-run 第二墙掉到 {hop2_free:.3f}（给定自己的第一跳后续开始偏）。exact {exact_free:.3f}。",
+        f"- **Oracle 第一墙 + AR 其余**：第二墙 {hop2_oracle:.3f}，后续墙 {later_w_oracle:.3f}，整段 exact {exact_oracle:.3f}。",
+        f"- **把第一跳改成模型第二候选再 AR**：第二墙 {hop2_2nd:.3f}，后续墙 {later_w_2nd:.3f}，exact {exact_2nd:.3f}。",
+        f"  几何合法率仍有 {valid_2nd:.3f}（与 free-run {valid_free:.3f} 接近），且 {any_2nd:.3f} 落在该场景已枚举的某条 GT 分支上——说明第二候选往往是树上的另一枝，而不是「同一条序列的局部噪声」。",
+        f"- **把第一跳改成随机墙再 AR**：合法率从 {valid_free:.3f} 掉到 {valid_rand:.3f}，落到场景 GT 分支的比例 {any_rand:.3f}，exact {exact_rand:.3f}。离开可见性树后，后续 next-token 几乎拼不出镜面路径。",
+        f"- One-shot 非 AR：exact {exact_os:.3f}，后续墙几乎对不上这条多跳 GT，但合法率 {valid_os:.3f}（常退化成短的 1-bounce/LoS 合法枝）。",
         "",
-        "对研究问题「传播路径是否适合直接当作普通 autoregressive sequence 来生成」：",
-        "本实验表明：路径的离散结构更接近 WinProp IRT 的可见性树搜索（全局、短深度、强几何约束），",
-        "而不是局部 next-token。第一交互一旦错，后续墙序列与连续点都会垮掉；",
-        "连续点在离散结构给定后几乎由镜面几何决定，更适合联合生成/回归（RadioDiff 式 generative 思想），而不是逐步 AR。",
-        "模型不必优于所有 baseline；这里 one-shot 与 oracle-first 只是为了对照「更少 AR」与「第一跳被纠正」。",
+        "### 连续交互点（离散墙序列给定）",
+        f"- 镜像法 oracle 第一跳点误差 {oracle_xy:.2e}（几何闭合）。离散结构已知时，连续点不该再当开放的 AR 序列来猜。",
+        f"- 联合回归 hop1 xy {joint_h1:.3f}，后续 {joint_later:.3f}；AR-t free-run 后续 {ar_free_xy:.3f}；污染 t0 后再 AR 后续 {ar_later:.3f}。",
+        f"- 本玩具里的小 DDPM 后续误差 {ddpm_xy:.3f}，没有超过联合回归（CPU 小组件、步数少）。它只用来表明：连续几何应联合生成，而不是逐步 AR；不声称复现 RadioDiff。",
+        "",
+        "### 对研究问题的回答",
+        "**不适合把传播路径直接当成普通 autoregressive sequence 来生成。**",
+        "WinProp IRT 的对象是「可见性树上的短深度搜索 + 元件上的连续点」。本实验里：",
+        "1. 第一交互是分支选择，不是局部 token；改错第一跳后，相对原 GT 的后续墙准确率崩掉；",
+        "2. 若错误第一跳仍落在树上（模型第二候选），可以走出另一条合法路径，但这是换枝，不是 AR 纠错；",
+        "3. 若第一跳是随机墙（离开树），几何合法率崩溃；",
+        "4. 连续点在离散结构给定后由镜像法决定，联合回归/生成比逐步 AR 更合适。",
+        "模型不必优于所有 baseline；one-shot 与 oracle-first 只是「更少 AR」和「第一跳被纠正」的对照。",
     ]
     text = "\n".join(lines)
     (out_dir / "findings.md").write_text(text, encoding="utf-8")
@@ -540,7 +593,10 @@ def run_experiment(
     make_plots(discrete, continuous, fig_dir)
     findings = write_findings(discrete, continuous, out)
     payload = {"discrete": discrete, "continuous": continuous, "findings": findings}
-    (out / "metrics.json").write_text(json.dumps(payload, indent=2, default=float), encoding="utf-8")
+    (out / "metrics.json").write_text(
+        json.dumps(_jsonable(payload), indent=2, ensure_ascii=False),
+        encoding="utf-8",
+    )
     return payload
 
 
