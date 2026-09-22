@@ -42,6 +42,8 @@ def train_one(model, loader, opt, ar: bool, dev) -> float:
                 batch["rx"],
                 batch["wall_feats"],
                 batch["wall_mask"],
+                batch["corner_feats"],
+                batch["corner_mask"],
             )
         else:
             tgt = batch["tokens"][:, 1:]
@@ -51,6 +53,8 @@ def train_one(model, loader, opt, ar: bool, dev) -> float:
                 batch["rx"],
                 batch["wall_feats"],
                 batch["wall_mask"],
+                corner_feats=batch["corner_feats"],
+                corner_mask=batch["corner_mask"],
             )
         loss = token_loss(logits, tgt)
         loss.backward()
@@ -76,6 +80,8 @@ def eval_tf_acc(model, loader, ar: bool, dev) -> float:
                 batch["rx"],
                 batch["wall_feats"],
                 batch["wall_mask"],
+                batch["corner_feats"],
+                batch["corner_mask"],
             )
         else:
             logits = model(
@@ -84,6 +90,8 @@ def eval_tf_acc(model, loader, ar: bool, dev) -> float:
                 batch["rx"],
                 batch["wall_feats"],
                 batch["wall_mask"],
+                corner_feats=batch["corner_feats"],
+                corner_mask=batch["corner_mask"],
             )
         pred = logits.argmax(dim=-1)
         mask = tgt != PAD_ID

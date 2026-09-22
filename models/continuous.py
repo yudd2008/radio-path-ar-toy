@@ -14,7 +14,13 @@ import torch.nn.functional as F
 
 from data.schema import MAX_BOUNCES, WALL_FEAT_DIM
 
-from .encoder import D_MODEL, SceneEncoder, SinusoidalTime, wall_slot_features
+from .encoder import (
+    D_MODEL,
+    SceneEncoder,
+    SinusoidalTime,
+    interaction_slot_features,
+    wall_slot_features,
+)
 
 
 def _cond_vec(
@@ -22,8 +28,13 @@ def _cond_vec(
     wall_feats: torch.Tensor,
     wall_ids: torch.Tensor,
     bounce_mask: torch.Tensor,
+    corner_feats: torch.Tensor | None = None,
+    kinds: torch.Tensor | None = None,
 ) -> torch.Tensor:
-    slots = wall_slot_features(wall_feats, wall_ids)  # B, L, 6
+    if corner_feats is not None and kinds is not None:
+        slots = interaction_slot_features(wall_feats, corner_feats, wall_ids, kinds)
+    else:
+        slots = wall_slot_features(wall_feats, wall_ids)
     flat = torch.cat(
         [slots.reshape(slots.size(0), -1), bounce_mask, scene], dim=-1
     )
@@ -45,9 +56,10 @@ class JointPointRegressor(nn.Module):
             nn.Linear(64, MAX_BOUNCES),
         )
 
-    def forward(self, channels, tx, rx, wall_feats, wall_ids, bounce_mask, **_):
-        scene, _ = self.encoder(channels, tx, rx, wall_feats)
-        cond = _cond_vec(scene, wall_feats, wall_ids, bounce_mask)
+    def forward(self, channels, tx, rx, wall_feats, wall_ids, bounce_mask,
+                corner_feats=None, kinds=None, **_):
+        scene, _, _ = self.encoder(channels, tx, rx, wall_feats, corner_feats)
+        cond = _cond_vec(scene, wall_feats, wall_ids, bounce_mask, corner_feats, kinds)
         return torch.sigmoid(self.mlp(cond))
 
 
@@ -70,11 +82,16 @@ class ARPointModel(nn.Module):
         wall_ids,
         bounce_mask,
         t_prev: torch.Tensor,
+        corner_feats=None,
+        kinds=None,
         **_,
     ):
         """t_prev: [B, L] with t_prev[:,0]=0 and t_prev[:,i]=t_{i-1} (teacher force)."""
-        scene, _ = self.encoder(channels, tx, rx, wall_feats)
-        slots = wall_slot_features(wall_feats, wall_ids)
+        scene, _, _ = self.encoder(channels, tx, rx, wall_feats, corner_feats)
+        if corner_feats is not None and kinds is not None:
+            slots = interaction_slot_features(wall_feats, corner_feats, wall_ids, kinds)
+        else:
+            slots = wall_slot_features(wall_feats, wall_ids)
         scene_exp = scene.unsqueeze(1).expand(-1, MAX_BOUNCES, -1)
         x = torch.cat([slots, t_prev.unsqueeze(-1), scene_exp], dim=-1)
         h, _ = self.gru(self.in_proj(x))
@@ -96,6 +113,9 @@ class ARPointModel(nn.Module):
         wall_ids,
         bounce_mask,
         t0_override: torch.Tensor | None = None,
+        corner_feats=None,
+        kinds=None,
+        **_,
     ) -> torch.Tensor:
         b = channels.size(0)
         device = channels.device
@@ -103,7 +123,15 @@ class ARPointModel(nn.Module):
         preds = torch.zeros(b, MAX_BOUNCES, device=device)
         for i in range(MAX_BOUNCES):
             y = self.forward(
-                channels, tx, rx, wall_feats, wall_ids, bounce_mask, t_prev=t_prev
+                channels,
+                tx,
+                rx,
+                wall_feats,
+                wall_ids,
+                bounce_mask,
+                t_prev=t_prev,
+                corner_feats=corner_feats,
+                kinds=kinds,
             )
             ti = y[:, i]
             if i == 0 and t0_override is not None:
@@ -138,18 +166,22 @@ class TinyPointDDPM(nn.Module):
         self.register_buffer("alphas", alphas)
         self.register_buffer("a_bar", a_bar)
 
-    def _cond(self, channels, tx, rx, wall_feats, wall_ids, bounce_mask):
-        scene, _ = self.encoder(channels, tx, rx, wall_feats)
-        return _cond_vec(scene, wall_feats, wall_ids, bounce_mask)
+    def _cond(self, channels, tx, rx, wall_feats, wall_ids, bounce_mask,
+              corner_feats=None, kinds=None, **_):
+        scene, _, _ = self.encoder(channels, tx, rx, wall_feats, corner_feats)
+        return _cond_vec(scene, wall_feats, wall_ids, bounce_mask, corner_feats, kinds)
 
-    def loss(self, x0, channels, tx, rx, wall_feats, wall_ids, bounce_mask):
+    def loss(self, x0, channels, tx, rx, wall_feats, wall_ids, bounce_mask,
+             corner_feats=None, kinds=None, **_):
         """x0: [B,K] in [0,1]."""
         b = x0.size(0)
         t = torch.randint(0, self.n_steps, (b,), device=x0.device)
         noise = torch.randn_like(x0)
         a = self.a_bar[t].unsqueeze(-1)
         xt = a.sqrt() * x0 + (1.0 - a).sqrt() * noise
-        cond = self._cond(channels, tx, rx, wall_feats, wall_ids, bounce_mask)
+        cond = self._cond(
+            channels, tx, rx, wall_feats, wall_ids, bounce_mask, corner_feats, kinds
+        )
         temb = self.time(t)
         pred = self.net(torch.cat([xt, temb, cond], dim=-1))
         err = (pred - noise) ** 2
@@ -167,6 +199,9 @@ class TinyPointDDPM(nn.Module):
         bounce_mask,
         n_steps: int | None = None,
         freeze_t0: torch.Tensor | None = None,
+        corner_feats=None,
+        kinds=None,
+        **_,
     ) -> torch.Tensor:
         """Ancestral sample. If freeze_t0 is set, replace x[:,0] each step
         (toy analogue of a constrained inverse / inpainting problem).
@@ -174,7 +209,9 @@ class TinyPointDDPM(nn.Module):
         n_steps = n_steps or self.n_steps
         b = channels.size(0)
         x = torch.randn(b, MAX_BOUNCES, device=channels.device)
-        cond = self._cond(channels, tx, rx, wall_feats, wall_ids, bounce_mask)
+        cond = self._cond(
+            channels, tx, rx, wall_feats, wall_ids, bounce_mask, corner_feats, kinds
+        )
         # subsample timesteps if n_steps < trained
         idxs = torch.linspace(self.n_steps - 1, 0, n_steps, device=x.device).long()
         for t in idxs:

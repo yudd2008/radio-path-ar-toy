@@ -186,6 +186,105 @@ class Rect:
             ),
         ]
 
+    def corners(self, start_corner_id: int, start_wall_id: int) -> list["Corner"]:
+        rid = self.rect_id
+        left, right, bottom, top = (
+            start_wall_id,
+            start_wall_id + 1,
+            start_wall_id + 2,
+            start_wall_id + 3,
+        )
+        return [
+            Corner(
+                start_corner_id,
+                rid,
+                f"r{rid}_bl",
+                self.xmin,
+                self.ymin,
+                -1.0,
+                0.0,
+                0.0,
+                -1.0,
+                left,
+                bottom,
+            ),
+            Corner(
+                start_corner_id + 1,
+                rid,
+                f"r{rid}_br",
+                self.xmax,
+                self.ymin,
+                1.0,
+                0.0,
+                0.0,
+                -1.0,
+                right,
+                bottom,
+            ),
+            Corner(
+                start_corner_id + 2,
+                rid,
+                f"r{rid}_tl",
+                self.xmin,
+                self.ymax,
+                -1.0,
+                0.0,
+                0.0,
+                1.0,
+                left,
+                top,
+            ),
+            Corner(
+                start_corner_id + 3,
+                rid,
+                f"r{rid}_tr",
+                self.xmax,
+                self.ymax,
+                1.0,
+                0.0,
+                0.0,
+                1.0,
+                right,
+                top,
+            ),
+        ]
+
+
+@dataclass(frozen=True)
+class Corner:
+    """Convex 90° rectangle vertex (2D vertical wedge). Stable ID per scene."""
+
+    corner_id: int
+    rect_id: int
+    name: str
+    x: float
+    y: float
+    n1x: float
+    n1y: float
+    n2x: float
+    n2y: float
+    wall_id_a: int
+    wall_id_b: int
+
+    @property
+    def xy(self) -> np.ndarray:
+        return np.array([self.x, self.y], dtype=np.float64)
+
+    def as_array(self) -> np.ndarray:
+        return np.array(
+            [self.x, self.y, self.n1x, self.n1y, self.n2x, self.n2y], dtype=np.float64
+        )
+
+    def n_faces_front(self, p: np.ndarray, eps: float = 1e-6) -> int:
+        """How many of the two walls have p on the outward / free-space side."""
+        v = np.asarray(p, dtype=np.float64) - self.xy
+        n = 0
+        if float(v[0] * self.n1x + v[1] * self.n1y) > eps:
+            n += 1
+        if float(v[0] * self.n2x + v[1] * self.n2y) > eps:
+            n += 1
+        return n
+
 
 def point_in_rect(p: np.ndarray, rect: Rect, eps: float = 0.0) -> bool:
     return (

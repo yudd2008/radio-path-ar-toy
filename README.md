@@ -40,18 +40,34 @@ Altair WinProp **Intelligent Ray Tracing**（[用户指南](https://2021.help.al
 | IRT | 本玩具 |
 | --- | --- |
 | tile / 墙元件 | 命名边、稳定 `wall_id` |
-| 树节点 | token：`TX` / `wall_k` / `RX` |
-| 树边（可见性） | 镜像法+遮挡下合法的相邻墙 |
-| 一条根到叶的射线 | `TX → wall_i → wall_j → RX` |
-| 元件上的交互点 | \(t\in(0,1)\)，点必须落在该墙上 |
-| 最大交互次数 | 2–3 次反射 |
+| 垂直棱 / 楔（绕射） | 矩形角点、稳定 `corner_id` |
+| 树节点 | token：`TX` / `R_wall_k` / `D_corner_c` / `RX` |
+| 树边（可见性） | 镜像法反射 或 角点绕射 的合法相邻交互 |
+| 一条根到叶的射线 | `TX → R_wall_i / D_corner_j → … → RX` |
+| 元件上的交互点 | 反射：\(t\in(0,1)\) 落在该墙上；绕射：角点坐标（t 记 0） |
+| 最大交互次数 | 2–3 次（反射+绕射合计） |
 
 **为何普通 next-token AR 与此不匹配：**
 
 - 下一步应是树上的一条可见边，并满足 **整段** 镜面/镜像法闭合，不是 \(p(\text{token}_k\mid\text{prefix})\) 去拟合唯一标注序列。
 - 同一 Tx/Rx 有 **多条** 合法枝；单序列 AR 监督把树压成一句话。
 - **第一交互 = 树的第一层**（发射端可见元件）。选错等于换根；后续局部续写既不能复活原 GT 枝，也不能凭「像下一词」保证几何合法。
-- 连续 \(t\) 由 **整段墙序列一次 unfold** 决定，不是由上一个点局部递推。
+- 连续 \(t\) 由 **整段墙序列一次 unfold** 决定，不是由上一个点局部递推。绕射点没有自由 \(t\)：离散角点 token 已经钉死坐标。
+
+### 2.1b 绕射（绕射 / diffraction）玩具映射
+
+WinProp IRT 在预处理/预测里也会检查 **垂直棱、楔的绕射**。本玩具用矩形角点当作 2D 凸 90° 楔，只做 **路径是否存在**，不做场强：
+
+| WinProp / UTD | 本玩具 |
+| --- | --- |
+| 垂直楔 / 棱边绕射 | `Corner`（`r0_bl` 等），token `D_corner_c` |
+| Keller 锥 / 3D 绕射系数 | **没有**；2D 折线过顶点 |
+| 轮廓/阴影边界 | 至少一端恰好看见一条前向面（silhouette） |
+| 被占 90° 锥 | 两端都不能落在障碍内部锥 |
+| 自由空间传播 | 两段都不穿墙 |
+| 完整 UTD、爬行波、斜率绕射 | **不做** |
+
+混合路径（反射+绕射）把绕射顶点当中间端点，中间的反射段仍用镜像法闭合。这是几何玩具，不是 WinProp 的工业绕射。
 
 ### 2.2 RadioDiff：连续几何用条件生成（我们只借课，不生成场图）
 
@@ -79,16 +95,16 @@ RadioUNet（Levie 等）是典型的 CNN **判别式** 无线电地图估计。R
 ## 3. 方法
 
 ```
-env/          轴对齐矩形障碍、稳定 wall ID、占用栅格
-pathfind/     镜像法：LoS / 1-bounce / 少次多跳镜面路径
-data/         JSONL+NPZ（几何、token、连续点、合法性）
+env/          轴对齐矩形障碍、稳定 wall/corner ID、占用栅格
+pathfind/     镜像法镜面反射 + 矩形角点绕射（Keller/UTD 存在性玩具）
+data/         JSONL+NPZ（几何、R/D token、连续点、合法性）
 models/       小 AR Transformer、one-shot 序列头、联合回归 / AR-t / 小 DDPM
-experiments/  训练 + 强制改第一跳的误差累积实验
+experiments/  训练 + 强制改第一跳的误差累积实验 + 反射/绕射展示图
 ```
 
-**离散表示：** `TX → wall_3 → wall_7 → RX`（wall ID 在单个场景内稳定；模型看墙的几何，而不是全局可迁移的 token 语义）。
+**离散表示：** `TX → R_wall_3 → D_corner_2 → RX`（墙反射 token 与角点绕射 token 分开；ID 在单个场景内稳定）。
 
-**连续表示：** 每个反射点在所属墙上的 \(t\in(0,1)\)，以及二维坐标。
+**连续表示：** 反射点在所属墙上的 \(t\in(0,1)\)；绕射点就是该角点（t 存 0）。
 
 **对照：** teacher-forcing vs free-run；强制错误第一交互再 AR；one-shot 整段；oracle 第一 token + AR 其余；连续头的联合回归 / AR-t / 小 DDPM vs 镜像法 oracle。
 
@@ -97,9 +113,13 @@ experiments/  训练 + 强制改第一跳的误差累积实验
 ```bash
 python3 -m pip install -r requirements.txt
 PYTHONPATH=. python3 tests/test_image_method.py
+PYTHONPATH=. python3 tests/test_diffraction.py
 PYTHONPATH=. python3 tests/test_models_shapes.py
+PYTHONPATH=. python3 -m experiments.demo_reflect_diffract --out results/figures
 PYTHONPATH=. python3 -m experiments.run_all --seed 0 --out results
 ```
+
+只看反射+绕射几何（不训练）：`python3 -m experiments.demo_reflect_diffract --out results/figures`。
 
 默认 CPU：生成小数据集（约 240/50/70 个场景）→ 训练很小的模型 → 写出 `results/metrics.json`、`results/findings.md` 和 `results/figures/`。整段 demo 大约一分钟量级。
 
@@ -113,7 +133,11 @@ PYTHONPATH=. python3 -m experiments.run_all --seed 0 --out results
 
 ![GT image-method paths](results/figures/gt_paths_example.png)
 
-强制改第一跳之后，模型走出**另一条**合法镜面路径（换枝），而不是沿着原 GT 续写：
+同一 NLOS 街区玩具里，**镜面反射与角点绕射画在一张图上**（实线橙 = 反射，虚线紫 = 绕射；图例含 token 序列）：
+
+![reflection + diffraction](results/figures/reflect_diffract_showcase.png)
+
+强制改第一跳之后，模型走出**另一条**合法路径（换枝），而不是沿着原 GT 续写：
 
 ![GT vs AR wrong first interaction](results/figures/example_0_sid20000.png)
 

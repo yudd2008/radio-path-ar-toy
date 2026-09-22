@@ -21,26 +21,27 @@ from torch.utils.data import DataLoader
 from data.dataset import PathNPZDataset
 from data.schema import (
     MAX_BOUNCES,
+    MAX_CORNERS,
     MAX_WALLS,
     PAD_ID,
-    RX_ID,
-    TX_ID,
+    VOCAB_DIFFRACT_OFFSET,
     VOCAB_WALL_OFFSET,
-    decode_wall_ids,
-    wall_token_id,
+    diffract_token_id,
+    reflect_token_id,
 )
 from env.viz import save_scene_paths
 from experiments.common import (
     device,
+    interactions_from_rec,
     load_jsonl_index,
-    points_from_t,
+    points_from_interactions,
     scene_from_json,
     seed_all,
     validity_and_points,
 )
 from models.continuous import ARPointModel, JointPointRegressor, TinyPointDDPM
 from models.sequence import ARPathTransformer, OneShotPathModel
-from pathfind.image_method import reconstruct_path
+from pathfind.diffraction import reconstruct_interactions
 
 
 def _load_ar(ckpt: Path) -> ARPathTransformer:
@@ -83,17 +84,24 @@ def _as_numpy_seq(t: torch.Tensor) -> np.ndarray:
     return t.detach().cpu().numpy().astype(np.int64)
 
 
+def _enc_kwargs(batch) -> dict:
+    return dict(
+        channels=batch["channels"],
+        tx=batch["tx"],
+        rx=batch["rx"],
+        wall_feats=batch["wall_feats"],
+        wall_mask=batch["wall_mask"],
+        corner_feats=batch["corner_feats"],
+        corner_mask=batch["corner_mask"],
+    )
+
+
 @torch.no_grad()
 def _second_choice_first_token(model: ARPathTransformer, batch, dev) -> torch.Tensor:
-    """Second-highest first-wall (or RX) under teacher-forced TX prefix."""
-    logits = model(
-        batch["tokens"][:, :1].to(dev),
-        batch["channels"].to(dev),
-        batch["tx"].to(dev),
-        batch["rx"].to(dev),
-        batch["wall_feats"].to(dev),
-        batch["wall_mask"].to(dev),
-    )
+    """Second-highest first interaction (R_wall / D_corner / RX) given TX."""
+    kw = _enc_kwargs(batch)
+    kw = {k: (v.to(dev) if torch.is_tensor(v) else v) for k, v in kw.items()}
+    logits = model(batch["tokens"][:, :1].to(dev), **kw)
     first = logits[:, -1, :].clone()
     top2 = first.topk(k=2, dim=-1).indices
     gt_first = batch["tokens"][:, 1].to(dev)
@@ -101,13 +109,14 @@ def _second_choice_first_token(model: ARPathTransformer, batch, dev) -> torch.Te
     # If still equal (degenerate), shift to another existing wall.
     same = pick == gt_first
     if same.any():
-        # pick first existing wall that is not GT
         walls = torch.arange(MAX_WALLS, device=dev) + VOCAB_WALL_OFFSET
-        exist = batch["wall_mask"].to(dev) > 0.5
+        corners = torch.arange(MAX_CORNERS, device=dev) + VOCAB_DIFFRACT_OFFSET
+        exist_w = batch["wall_mask"].to(dev) > 0.5
+        exist_c = batch["corner_mask"].to(dev) > 0.5
         for b in range(pick.size(0)):
             if not bool(same[b]):
                 continue
-            cand = walls[exist[b]]
+            cand = torch.cat([walls[exist_w[b]], corners[exist_c[b]]])
             cand = cand[cand != gt_first[b]]
             pick[b] = cand[0] if cand.numel() else pick[b]
     return pick
@@ -117,12 +126,14 @@ def _random_wrong_first(batch, rng: np.random.Generator) -> torch.Tensor:
     b = batch["tokens"].size(0)
     out = batch["tokens"][:, 1].clone()
     for i in range(b):
-        exist = (batch["wall_mask"][i] > 0.5).numpy()
-        wids = np.where(exist)[0]
-        gt = int(batch["wall_ids"][i, 0].item())
-        cand = [w for w in wids if w != gt]
+        wids = np.where((batch["wall_mask"][i] > 0.5).numpy())[0]
+        cids = np.where((batch["corner_mask"][i] > 0.5).numpy())[0]
+        gt_tok = int(batch["tokens"][i, 1].item())
+        cand = [reflect_token_id(int(w)) for w in wids]
+        cand += [diffract_token_id(int(c)) for c in cids]
+        cand = [t for t in cand if t != gt_tok]
         if cand:
-            out[i] = wall_token_id(int(rng.choice(cand)))
+            out[i] = int(rng.choice(cand))
     return out
 
 
@@ -140,73 +151,29 @@ def eval_discrete(ar, oneshot, loader, json_index, rng, fig_dir: Path) -> dict:
     stats = defaultdict(list)
     examples = []
     n_plot = 0
-    scene_path_set: dict[int, set[tuple[int, ...]]] = defaultdict(set)
+    scene_path_set: dict[int, set[tuple[tuple[str, int], ...]]] = defaultdict(set)
     for rec in json_index.values():
-        scene_path_set[int(rec["scene_id"])].add(tuple(int(w) for w in rec["wall_ids"]))
+        scene_path_set[int(rec["scene_id"])].add(tuple(interactions_from_rec(rec)))
 
     for batch in loader:
         bsz = batch["tokens"].size(0)
         tokens = batch["tokens"]
+        enc = _enc_kwargs(batch)
         # teacher forcing hop acc
-        logits = ar(
-            tokens[:, :-1],
-            batch["channels"],
-            batch["tx"],
-            batch["rx"],
-            batch["wall_feats"],
-            batch["wall_mask"],
-        )
+        logits = ar(tokens[:, :-1], **enc)
         tf_pred = logits.argmax(dim=-1)  # B, T-1  aligned with tokens[:,1:]
-        os_logits = oneshot(
-            batch["channels"],
-            batch["tx"],
-            batch["rx"],
-            batch["wall_feats"],
-            batch["wall_mask"],
-        )
+        os_logits = oneshot(**enc)
         os_pred_slots = os_logits.argmax(dim=-1)
 
         second = _second_choice_first_token(ar, batch, device())
         rnd = _random_wrong_first(batch, rng)
 
-        free = ar.greedy_decode(
-            batch["channels"], batch["tx"], batch["rx"], batch["wall_feats"], batch["wall_mask"]
-        )
-        oracle = ar.greedy_decode(
-            batch["channels"],
-            batch["tx"],
-            batch["rx"],
-            batch["wall_feats"],
-            batch["wall_mask"],
-            force_first=tokens[:, 1],
-        )
-        interv = ar.greedy_decode(
-            batch["channels"],
-            batch["tx"],
-            batch["rx"],
-            batch["wall_feats"],
-            batch["wall_mask"],
-            force_first=second,
-        )
-        interv_rand = ar.greedy_decode(
-            batch["channels"],
-            batch["tx"],
-            batch["rx"],
-            batch["wall_feats"],
-            batch["wall_mask"],
-            force_first=rnd,
-        )
-        os_seq = oneshot.decode(
-            batch["channels"], batch["tx"], batch["rx"], batch["wall_feats"], batch["wall_mask"]
-        )
-        os_interv = oneshot.decode(
-            batch["channels"],
-            batch["tx"],
-            batch["rx"],
-            batch["wall_feats"],
-            batch["wall_mask"],
-            force_first=second,
-        )
+        free = ar.greedy_decode(**enc)
+        oracle = ar.greedy_decode(**enc, force_first=tokens[:, 1])
+        interv = ar.greedy_decode(**enc, force_first=second)
+        interv_rand = ar.greedy_decode(**enc, force_first=rnd)
+        os_seq = oneshot.decode(**enc)
+        os_interv = oneshot.decode(**enc, force_first=second)
 
         for i in range(bsz):
             gt = _as_numpy_seq(tokens[i])
@@ -231,10 +198,10 @@ def eval_discrete(ar, oneshot, loader, json_index, rng, fig_dir: Path) -> dict:
                     stats[f"{tag}_later_wall_acc"].append(float(np.mean(flags[1:nb])))
                 if nb >= 2 and len(flags) >= 2:
                     stats[f"{tag}_hop2_wall"].append(float(flags[1]))
-                valid, pts, wids = validity_and_points(scene, pred_seq)
+                valid, pts, inter = validity_and_points(scene, pred_seq)
                 stats[f"{tag}_valid"].append(int(valid))
-                stats[f"{tag}_pred_nbounces"].append(len(wids))
-                stats[f"{tag}_any_scene_path"].append(int(tuple(wids) in scene_path_set[sid]))
+                stats[f"{tag}_pred_nbounces"].append(len(inter))
+                stats[f"{tag}_any_scene_path"].append(int(tuple(inter) in scene_path_set[sid]))
                 if pts is not None:
                     n = min(len(pts), len(gt_pts))
                     err = [float(np.linalg.norm(pts[j] - gt_pts[j])) for j in range(1, n)]
@@ -243,7 +210,7 @@ def eval_discrete(ar, oneshot, loader, json_index, rng, fig_dir: Path) -> dict:
                     stats[f"{tag}_xy_mean"].append(float(np.mean(err)) if err else 0.0)
                 else:
                     stats[f"{tag}_xy_mean"].append(float("nan"))
-                return valid, pts, wids, flags
+                return valid, pts, inter, flags
 
             # teacher forcing: stitch TX + tf predictions
             tf_seq = gt.copy()
@@ -266,28 +233,26 @@ def eval_discrete(ar, oneshot, loader, json_index, rng, fig_dir: Path) -> dict:
 
             if n_plot < 8 and nb >= 2:
                 _, free_pts, _ = validity_and_points(scene, _as_numpy_seq(free[i]))
-                _, iv_pts, _ = validity_and_points(scene, _as_numpy_seq(interv[i]))
-                paths = [{"points": gt_pts, "label": "GT"}]
+                _, iv_pts, iv_inter = validity_and_points(scene, _as_numpy_seq(interv[i]))
+                paths = [{"points": gt_pts, "label": "GT", "mechanism": rec.get("mechanism", "reflection")}]
                 if free_pts is not None:
-                    paths.append({"points": free_pts, "label": "AR free-run"})
+                    paths.append({"points": free_pts, "label": "AR free-run", "mechanism": "mixed"})
                 if iv_pts is not None:
-                    paths.append({"points": iv_pts, "label": "AR wrong-1st"})
-                else:
-                    # still draw the (invalid) polyline from tokens via t-midpoints
-                    wids = decode_wall_ids(_as_numpy_seq(interv[i]))
-                    if wids and all(0 <= w < len(scene.walls) for w in wids):
-                        fake_t = [0.5] * len(wids)
-                        paths.append(
-                            {
-                                "points": points_from_t(scene, wids, fake_t),
-                                "label": "wrong-1st (invalid geom)",
-                            }
-                        )
+                    paths.append({"points": iv_pts, "label": "AR wrong-1st", "mechanism": "mixed"})
+                elif iv_inter:
+                    fake_t = [0.5] * len(iv_inter)
+                    paths.append(
+                        {
+                            "points": points_from_interactions(scene, iv_inter, fake_t),
+                            "label": "wrong-1st (invalid geom)",
+                            "mechanism": "mixed",
+                        }
+                    )
                 save_scene_paths(
                     scene,
                     paths,
                     fig_dir / f"example_{n_plot}_sid{sid}.png",
-                    title=f"scene {sid}  GT walls {rec['wall_ids']}  n_bounce={nb}",
+                    title=f"scene {sid}  GT {rec.get('tokens')}  n={nb}",
                     wall_labels=True,
                 )
                 n_plot += 1
@@ -319,63 +284,34 @@ def eval_continuous(joint, ar_t, ddpm, loader, json_index, rng) -> dict:
     stats = defaultdict(list)
     for batch in loader:
         bsz = batch["tokens"].size(0)
-        jpred = joint(
-            batch["channels"],
-            batch["tx"],
-            batch["rx"],
-            batch["wall_feats"],
-            batch["wall_ids"],
-            batch["bounce_mask"],
+        cont_kw = dict(
+            channels=batch["channels"],
+            tx=batch["tx"],
+            rx=batch["rx"],
+            wall_feats=batch["wall_feats"],
+            wall_ids=batch["wall_ids"],
+            bounce_mask=batch["bounce_mask"],
+            corner_feats=batch["corner_feats"],
+            kinds=batch["kinds"],
         )
-        ar_free = ar_t.free_run(
-            batch["channels"],
-            batch["tx"],
-            batch["rx"],
-            batch["wall_feats"],
-            batch["wall_ids"],
-            batch["bounce_mask"],
-        )
+        jpred = joint(**cont_kw)
+        ar_free = ar_t.free_run(**cont_kw)
         t_gt = batch["t_on_wall"]
         # corrupt first t
         noise = torch.full((bsz,), 0.28)
         t0_bad = (t_gt[:, 0] + noise).clamp(0.05, 0.95)
         # if GT t0 already near bound, flip to the other side
         t0_bad = torch.where((t_gt[:, 0] - t0_bad).abs() < 0.08, (t_gt[:, 0] - 0.28).clamp(0.05, 0.95), t0_bad)
-        ar_bad = ar_t.free_run(
-            batch["channels"],
-            batch["tx"],
-            batch["rx"],
-            batch["wall_feats"],
-            batch["wall_ids"],
-            batch["bounce_mask"],
-            t0_override=t0_bad,
-        )
-        dd = ddpm.sample(
-            batch["channels"],
-            batch["tx"],
-            batch["rx"],
-            batch["wall_feats"],
-            batch["wall_ids"],
-            batch["bounce_mask"],
-            n_steps=12,
-        )
-        dd_freeze = ddpm.sample(
-            batch["channels"],
-            batch["tx"],
-            batch["rx"],
-            batch["wall_feats"],
-            batch["wall_ids"],
-            batch["bounce_mask"],
-            n_steps=12,
-            freeze_t0=t0_bad,
-        )
+        ar_bad = ar_t.free_run(**cont_kw, t0_override=t0_bad)
+        dd = ddpm.sample(**cont_kw, n_steps=12)
+        dd_freeze = ddpm.sample(**cont_kw, n_steps=12, freeze_t0=t0_bad)
         for i in range(bsz):
             sid = int(batch["scene_id"][i].item())
             pid = int(batch["path_id"][i].item())
             rec = json_index[(sid, pid)]
             scene = scene_from_json(rec)
-            wids = rec["wall_ids"]
-            nb = len(wids)
+            inter = interactions_from_rec(rec)
+            nb = len(inter)
             if nb < 1:
                 continue
             mask = batch["bounce_mask"][i].numpy()
@@ -388,7 +324,7 @@ def eval_continuous(joint, ar_t, ddpm, loader, json_index, rng) -> dict:
                     if mask[k] < 0.5:
                         continue
                     stats[f"{tag}_t_hop{k+1}"].append(abs(float(t_hat[k] - gt_t[k])))
-                pts = points_from_t(scene, wids, t_hat[:nb])
+                pts = points_from_interactions(scene, inter, t_hat[:nb])
                 for k in range(nb):
                     stats[f"{tag}_xy_hop{k+1}"].append(
                         float(np.linalg.norm(pts[k + 1] - gt_pts[k + 1]))
@@ -407,8 +343,8 @@ def eval_continuous(joint, ar_t, ddpm, loader, json_index, rng) -> dict:
             rec_err("ddpm", dd[i])
             rec_err("ddpm_freeze_t0", dd_freeze[i])
 
-            # image-method oracle (discrete structure known)
-            oracle = reconstruct_path(scene, wids)
+            # geometry oracle (discrete R/D structure known)
+            oracle = reconstruct_interactions(scene, inter)
             if oracle is not None:
                 for k in range(nb):
                     stats["oracle_t_hop" + str(k + 1)].append(
@@ -463,7 +399,7 @@ def make_plots(discrete: dict, continuous: dict, out_dir: Path) -> None:
     exact = [hop_table[t]["exact"] for t in tags]
     valid = [hop_table[t]["valid"] for t in tags]
     ax.bar(x - 0.18, exact, 0.36, label="exact match vs this GT path")
-    ax.bar(x + 0.18, valid, 0.36, label="geometrically valid specular path")
+    ax.bar(x + 0.18, valid, 0.36, label="geometrically valid path (R / D / mixed)")
     ax.set_xticks(x)
     ax.set_xticklabels([labels[t] for t in tags], rotation=28, ha="right", fontsize=8)
     ax.set_ylim(0, 1.05)
@@ -532,12 +468,14 @@ def write_findings(discrete: dict, continuous: dict, out_dir: Path) -> str:
         "### 论文主张（本玩具对齐的那几条）",
         "",
         "**WinProp IRT**（Altair 用户指南；Hoppe et al., EPMCC 1999）：寻径是在预处理好的墙面/tile 可见性关系上做 **树搜索**；交互点被约束在这些离散元件上；交互次数很少（文档称最多约三次即可）。树上每一枝是「两个元件之间的可见性关系」，预测时先展开发射端可见的第一层，再递归检查反射条件。",
-        "→ 本玩具：`wall_id` token = 树节点；合法 token 邻接 = 树边；连续 t = 该墙/tile 上的点。普通 AR 把「树」当成「一条句子」的局部 next-token。",
+        "→ 本玩具：`R_wall_k` / `D_corner_c` token = 树节点（反射墙或绕射角点）；合法 token 邻接 = 树边；连续 t = 该墙上的点（绕射点就是角点，t=0）。普通 AR 把「树」当成「一条句子」的局部 next-token。",
         "",
         "**RadioDiff**（Wang et al., IEEE TCCN 2024）：无采样无线电地图构建更应是 **条件生成**，而不是 RadioUNet 式纯判别 MSE。路径损耗并不已经写在输入里，必须被生成出来。",
         "→ 本玩具 **不重实现 RadioDiff、不生成场图**。只把同一课用在 **固定离散路径结构上的连续交互点**：联合回归/小 DDPM，而不是逐步 AR 猜 t。RadioDiff 生成 pathloss map；我们生成/refinement 的是墙上的点。",
         "",
         "**RadioUNet**：仅作占用栅格 + Tx/Rx 通道的场景编码器上下文，不估计 RM。",
+        "",
+        "WinProp IRT 也跟踪垂直棱/楔的绕射。本玩具在矩形角点上加了简化的 2D Keller/UTD **存在性**判定（轮廓/前向面、自由空间、最小弯折），token 为 `D_corner_c`。这不是完整 UTD 系数、不是 3D Keller cone。下述 AR 数字来自本次 run 的离散序列（现在可以含绕射 token）；没有另造指标。",
         "",
         "### 离散交互序列（已有测量）",
         f"- 第一跳（相对「这一条」GT 路径）准确率只有 {hop1_tf:.3f}。同一 Tx/Rx 通常有多条合法 IRT 分支，普通 AR 被训练成对准单条标注路径，第一跳本身就不是唯一 next-token。这与 IRT「第一层 = 发射端可见元件的分支选择」一致。",

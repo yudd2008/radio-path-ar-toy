@@ -1,0 +1,141 @@
+{
+  "figure": "results/figures/reflect_diffract_showcase.png",
+  "nlos": true,
+  "n_paths": 12,
+  "mechanisms": [
+    "diffraction",
+    "mixed",
+    "reflection"
+  ],
+  "paths": [
+    {
+      "mechanism": "reflection",
+      "tokens": [
+        "TX",
+        "R_wall_5",
+        "RX"
+      ],
+      "length": 0.7528612089887484,
+      "n_interactions": 1
+    },
+    {
+      "mechanism": "diffraction",
+      "tokens": [
+        "TX",
+        "D_corner_0",
+        "RX"
+      ],
+      "length": 0.6172601347585389,
+      "n_interactions": 1
+    },
+    {
+      "mechanism": "mixed",
+      "tokens": [
+        "TX",
+        "R_wall_5",
+        "D_corner_0",
+        "RX"
+      ],
+      "length": 0.7555842959032391,
+      "n_interactions": 2
+    },
+    {
+      "mechanism": "reflection",
+      "tokens": [
+        "TX",
+        "R_wall_0",
+        "R_wall_5",
+        "RX"
+      ],
+      "length": 0.9848857801796105,
+      "n_interactions": 2
+    },
+    {
+      "mechanism": "diffraction",
+      "tokens": [
+        "TX",
+        "D_corner_5",
+        "RX"
+      ],
+      "length": 0.9903184373378511,
+      "n_interactions": 1
+    },
+    {
+      "mechanism": "mixed",
+      "tokens": [
+        "TX",
+        "D_corner_0",
+        "R_wall_5",
+        "RX"
+      ],
+      "length": 1.036795518229407,
+      "n_interactions": 2
+    },
+    {
+      "mechanism": "diffraction",
+      "tokens": [
+        "TX",
+        "D_corner_0",
+        "D_corner_5",
+        "RX"
+      ],
+      "length": 1.1121014860266514,
+      "n_interactions": 2
+    },
+    {
+      "mechanism": "mixed",
+      "tokens": [
+        "TX",
+        "R_wall_0",
+        "D_corner_5",
+        "RX"
+      ],
+      "length": 1.108429224702876,
+      "n_interactions": 2
+    },
+    {
+      "mechanism": "diffraction",
+      "tokens": [
+        "TX",
+        "D_corner_5",
+        "D_corner_0",
+        "RX"
+      ],
+      "length": 1.203149326587904,
+      "n_interactions": 2
+    },
+    {
+      "mechanism": "diffraction",
+      "tokens": [
+        "TX",
+        "D_corner_7",
+        "D_corner_0",
+        "RX"
+      ],
+      "length": 1.2465704890941471,
+      "n_interactions": 2
+    },
+    {
+      "mechanism": "diffraction",
+      "tokens": [
+        "TX",
+        "D_corner_2",
+        "D_corner_5",
+        "RX"
+      ],
+      "length": 1.5727073009900914,
+      "n_interactions": 2
+    },
+    {
+      "mechanism": "diffraction",
+      "tokens": [
+        "TX",
+        "D_corner_5",
+        "D_corner_1",
+        "RX"
+      ],
+      "length": 1.6480849336634644,
+      "n_interactions": 2
+    }
+  ]
+}

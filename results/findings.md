@@ -4,7 +4,7 @@
 ### 论文主张（本玩具对齐的那几条）
 
 **WinProp IRT**（Altair 用户指南；Hoppe et al., EPMCC 1999）：寻径是在预处理好的墙面/tile 可见性关系上做 **树搜索**；交互点被约束在这些离散元件上；交互次数很少（文档称最多约三次即可）。树上每一枝是「两个元件之间的可见性关系」，预测时先展开发射端可见的第一层，再递归检查反射条件。  
-→ 本玩具：`wall_id` token = 树节点；合法 token 邻接 = 树边；\(t\in(0,1)\) = 该墙/tile 上的连续点。普通 AR 把「树」当成「一条句子」的局部 next-token。
+→ 本玩具：`R_wall_k` / `D_corner_c` token = 树节点（反射墙或绕射角点）；合法 token 邻接 = 树边；\(t\in(0,1)\) = 该墙上的连续点（绕射点就是角点）。普通 AR 把「树」当成「一条句子」的局部 next-token。
 
 **RadioDiff**（Wang et al., IEEE TCCN 2024）：无采样无线电地图构建更应是 **条件生成**，而不是 RadioUNet 式纯判别 MSE。路径损耗并不已经写在输入里，必须被生成出来。  
 → 本玩具 **不重实现 RadioDiff、不生成场图**。只把同一课用在 **固定离散路径结构上的连续交互点**：联合回归/小 DDPM，而不是逐步 AR 猜 \(t_i\mid t_{<i}\)。RadioDiff 生成的是 pathloss map；我们生成/ refinement 的是墙上的点。
@@ -38,3 +38,7 @@
 4. 连续点在离散结构给定后由镜像法决定（oracle 误差 0），联合回归/生成比逐步 AR 更合适。
 
 模型不必优于所有 baseline；one-shot 与 oracle-first 只是「更少 AR」和「第一跳被纠正」的对照。
+
+### 绕射（几何玩具，不是另造的 AR 指标）
+
+WinProp IRT 也会在垂直棱/楔上绕射。本玩具在矩形角点上加了简化的 2D 存在性判定（轮廓面、自由空间、最小弯折），token 为 `D_corner_c`，与 `R_wall_k` 分开。**不是** 完整 UTD / 3D Keller cone。展示图见 `results/figures/reflect_diffract_showcase.png`。上表 AR 数字仍来自 seed=0 实验测量，没有为绕射编造新指标。

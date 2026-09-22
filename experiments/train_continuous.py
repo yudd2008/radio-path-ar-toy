@@ -33,6 +33,8 @@ def train_regressor(model, loader, opt, dev, ar: bool) -> float:
             wall_feats=batch["wall_feats"],
             wall_ids=batch["wall_ids"],
             bounce_mask=batch["bounce_mask"],
+            corner_feats=batch["corner_feats"],
+            kinds=batch["kinds"],
         )
         if ar:
             pred = model(**kwargs, t_prev=ARPointModel.shift_prev(batch["t_on_wall"]))
@@ -65,6 +67,8 @@ def train_ddpm(model: TinyPointDDPM, loader, opt, dev) -> float:
             batch["wall_feats"],
             batch["wall_ids"],
             batch["bounce_mask"],
+            corner_feats=batch["corner_feats"],
+            kinds=batch["kinds"],
         )
         loss.backward()
         opt.step()
@@ -86,6 +90,8 @@ def eval_regressor(model, loader, dev, ar: bool) -> float:
             wall_feats=batch["wall_feats"],
             wall_ids=batch["wall_ids"],
             bounce_mask=batch["bounce_mask"],
+            corner_feats=batch["corner_feats"],
+            kinds=batch["kinds"],
         )
         if ar:
             pred = model.free_run(**kwargs)
@@ -164,6 +170,8 @@ def run_training(
                     batch["wall_ids"],
                     batch["bounce_mask"],
                     n_steps=12,
+                    corner_feats=batch["corner_feats"],
+                    kinds=batch["kinds"],
                 )
                 mask = batch["bounce_mask"]
                 va += float(((pred - batch["t_on_wall"]) ** 2 * mask).sum().item())

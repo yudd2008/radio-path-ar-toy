@@ -7,7 +7,7 @@ from typing import Optional
 
 import numpy as np
 
-from .geometry import EPS, Rect, Wall, point_in_rect, segment_hits_rect_interior
+from .geometry import EPS, Corner, Rect, Wall, point_in_rect, segment_hits_rect_interior
 
 
 @dataclass
@@ -16,6 +16,7 @@ class Scene:
     height: float
     rects: list[Rect]
     walls: list[Wall]
+    corners: list[Corner]
     tx: np.ndarray
     rx: np.ndarray
     scene_id: int = 0
@@ -33,13 +34,16 @@ class Scene:
         meta: Optional[dict] = None,
     ) -> "Scene":
         walls: list[Wall] = []
+        corners: list[Corner] = []
         for i, rect in enumerate(rects):
             walls.extend(rect.walls(start_wall_id=4 * i))
+            corners.extend(rect.corners(start_corner_id=4 * i, start_wall_id=4 * i))
         return cls(
             width=width,
             height=height,
             rects=list(rects),
             walls=walls,
+            corners=corners,
             tx=np.asarray(tx, dtype=np.float64).reshape(2),
             rx=np.asarray(rx, dtype=np.float64).reshape(2),
             scene_id=scene_id,
@@ -209,6 +213,34 @@ def random_canyon_scene(
     if not dummy.point_free(tx, clearance=0.02) or not dummy.point_free(rx, clearance=0.02):
         return None
     return Scene.from_rects(width, height, rects, tx=tx, rx=rx, scene_id=scene_id)
+
+
+def showcase_reflect_diffract_scene(
+    width: float = 1.0,
+    height: float = 1.0,
+    nlos: bool = True,
+    scene_id: int = 0,
+) -> Scene:
+    """Fixed urban-toy scene with LoS-blocked (or partial) geometry, a 1-bounce
+    specular path, and a corner-diffracted path around a building.
+
+    Default (nlos=True): Tx left of a building, Rx below it in the geometric
+    shadow. Diffraction wraps the bottom-left corner; a thin left-hand wall
+    provides a same-side 1-bounce reflection that still reaches Rx under the
+    building, plus a 2-bounce ping-pong in the alley.
+    """
+    bldg = Rect(0, 0.38, 0.38, 0.88, 0.88)
+    screen = Rect(1, 0.04, 0.12, 0.14, 0.92)
+    if nlos:
+        tx = np.array([0.24, 0.62], dtype=np.float64)
+        rx = np.array([0.62, 0.14], dtype=np.float64)
+    else:
+        tx = np.array([0.24, 0.18], dtype=np.float64)
+        rx = np.array([0.62, 0.18], dtype=np.float64)
+    return Scene.from_rects(
+        width, height, [bldg, screen], tx=tx, rx=rx, scene_id=scene_id,
+        meta={"showcase": "reflect_diffract", "nlos": nlos},
+    )
 
 
 def random_scene(

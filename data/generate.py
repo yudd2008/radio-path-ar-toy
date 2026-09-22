@@ -1,4 +1,4 @@
-"""Random 2D urban scenes + exact few-bounce specular paths."""
+"""Random 2D urban scenes + exact few-bounce specular and diffracted paths."""
 
 from __future__ import annotations
 
@@ -10,7 +10,7 @@ import numpy as np
 from tqdm import tqdm
 
 from env.raster import scene_channels
-from env.scene import Scene, random_canyon_scene, random_scene
+from env.scene import Scene, random_canyon_scene, random_scene, showcase_reflect_diffract_scene
 from pathfind.image_method import find_paths
 
 from .schema import GRID, MAX_BOUNCES, pack_sample
@@ -24,7 +24,11 @@ def _one_scene(
     max_paths: int,
     n_rects: Optional[int] = None,
 ) -> Optional[tuple[Scene, list]]:
-    if rng.random() < 0.55:
+    if rng.random() < 0.08:
+        scene = showcase_reflect_diffract_scene(
+            nlos=rng.random() < 0.85, scene_id=scene_id
+        )
+    elif rng.random() < 0.55:
         scene = random_canyon_scene(rng, scene_id=scene_id)
     else:
         if n_rects is None:
@@ -121,14 +125,28 @@ def generate_dataset(
     train = generate_split(rng, n_train, "train", start_id=0, max_bounces=max_bounces, max_paths=max_paths)
     val = generate_split(rng, n_val, "val", start_id=10_000, max_bounces=max_bounces, max_paths=max_paths)
     test = generate_split(rng, n_test, "test", start_id=20_000, max_bounces=max_bounces, max_paths=max_paths)
+    # Guaranteed NLOS showcase in every split so AR sees R and D tokens.
+    extra_by_split = {"train": [], "val": [], "test": []}
+    for split, sid in (("train", 30_000), ("val", 31_000), ("test", 32_000)):
+        scene = showcase_reflect_diffract_scene(nlos=True, scene_id=sid)
+        channels = scene_channels(scene, grid=GRID)
+        spaths = find_paths(scene, max_bounces=max_bounces, max_paths=max_paths)
+        packed = [
+            pack_sample(scene, path, channels, split, pid, is_shortest=(pid == 0))
+            for pid, path in enumerate(spaths)
+        ]
+        extra_by_split[split] = packed
+    train = train + extra_by_split["train"]
+    val = val + extra_by_split["val"]
+    test = test + extra_by_split["test"]
     all_samples = train + val + test
     save_npz(all_samples, out / "dataset.npz")
     save_jsonl(all_samples, out / "dataset.jsonl")
     # Tiny schema example
     example = {
-        "description": "Each JSONL row is one specular path in one scene.",
-        "tokens": "TX → wall_k → ... → RX; wall IDs are stable per scene.",
-        "t_on_wall": "1-D parameter in (0,1) of each bounce along that named edge.",
+        "description": "Each JSONL row is one path (LoS, reflection, diffraction, or mixed).",
+        "tokens": "TX → R_wall_k and/or D_corner_c → RX; IDs are stable per scene.",
+        "t_on_wall": "For reflections: t in (0,1) along the named edge. For diffraction: 0 (point is the corner).",
         "points": "Polyline including Tx and Rx.",
         "n_samples": len(all_samples),
         "n_train_paths": len(train),

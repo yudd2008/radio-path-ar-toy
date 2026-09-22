@@ -6,7 +6,17 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from data.schema import MAX_BOUNCES, MAX_SEQ_LEN, MAX_WALLS, PAD_ID, RX_ID, TX_ID, VOCAB_WALL_OFFSET
+from data.schema import (
+    MAX_BOUNCES,
+    MAX_CORNERS,
+    MAX_SEQ_LEN,
+    MAX_WALLS,
+    PAD_ID,
+    RX_ID,
+    TX_ID,
+    VOCAB_DIFFRACT_OFFSET,
+    VOCAB_WALL_OFFSET,
+)
 
 from .encoder import D_MODEL, VOCAB_SIZE, SceneEncoder
 
@@ -17,26 +27,34 @@ def causal_mask(t: int, device: torch.device) -> torch.Tensor:
 
 
 class TokenMixer(nn.Module):
-    """Map a token id to a vector, using geometry for wall tokens."""
+    """Map a token id to a vector, using wall or corner geometry."""
 
     def __init__(self, d_model: int = D_MODEL):
         super().__init__()
         self.special = nn.Embedding(VOCAB_WALL_OFFSET, d_model)  # PAD, TX, RX
         self.d_model = d_model
 
-    def forward(self, tokens: torch.Tensor, wall_embed: torch.Tensor) -> torch.Tensor:
-        """tokens [B,T], wall_embed [B,W,d] → [B,T,d]."""
+    def forward(
+        self,
+        tokens: torch.Tensor,
+        wall_embed: torch.Tensor,
+        corner_embed: torch.Tensor,
+    ) -> torch.Tensor:
+        """tokens [B,T] → [B,T,d]."""
         b, tlen = tokens.shape
         out = torch.zeros(b, tlen, self.d_model, device=tokens.device, dtype=wall_embed.dtype)
         special_mask = tokens < VOCAB_WALL_OFFSET
         out[special_mask] = self.special(tokens[special_mask].clamp(min=0, max=VOCAB_WALL_OFFSET - 1))
-        wall_tok = tokens >= VOCAB_WALL_OFFSET
-        if wall_tok.any():
+        refl = (tokens >= VOCAB_WALL_OFFSET) & (tokens < VOCAB_DIFFRACT_OFFSET)
+        if refl.any():
             wid = (tokens - VOCAB_WALL_OFFSET).clamp(min=0, max=MAX_WALLS - 1)
-            gathered = wall_embed.gather(
-                1, wid.unsqueeze(-1).expand(-1, -1, self.d_model)
-            )
-            out = torch.where(wall_tok.unsqueeze(-1), gathered, out)
+            gathered = wall_embed.gather(1, wid.unsqueeze(-1).expand(-1, -1, self.d_model))
+            out = torch.where(refl.unsqueeze(-1), gathered, out)
+        diffr = tokens >= VOCAB_DIFFRACT_OFFSET
+        if diffr.any():
+            cid = (tokens - VOCAB_DIFFRACT_OFFSET).clamp(min=0, max=MAX_CORNERS - 1)
+            gathered = corner_embed.gather(1, cid.unsqueeze(-1).expand(-1, -1, self.d_model))
+            out = torch.where(diffr.unsqueeze(-1), gathered, out)
         return out
 
 
@@ -62,7 +80,12 @@ class ARPathTransformer(nn.Module):
         self.d_model = d_model
 
     def logits_from_hidden(
-        self, h: torch.Tensor, wall_embed: torch.Tensor, wall_mask: torch.Tensor
+        self,
+        h: torch.Tensor,
+        wall_embed: torch.Tensor,
+        wall_mask: torch.Tensor,
+        corner_embed: torch.Tensor,
+        corner_mask: torch.Tensor,
     ) -> torch.Tensor:
         """h [B,T,d] → vocab logits [B,T,V]."""
         b, tlen, d = h.shape
@@ -71,6 +94,9 @@ class ARPathTransformer(nn.Module):
         wall_scores = torch.einsum("btd,bwd->btw", h, wall_embed)
         wall_scores = wall_scores.masked_fill(wall_mask.unsqueeze(1) < 0.5, -1e9)
         logits[:, :, VOCAB_WALL_OFFSET : VOCAB_WALL_OFFSET + MAX_WALLS] = wall_scores
+        corner_scores = torch.einsum("btd,bcd->btc", h, corner_embed)
+        corner_scores = corner_scores.masked_fill(corner_mask.unsqueeze(1) < 0.5, -1e9)
+        logits[:, :, VOCAB_DIFFRACT_OFFSET : VOCAB_DIFFRACT_OFFSET + MAX_CORNERS] = corner_scores
         return logits
 
     def forward(
@@ -81,16 +107,22 @@ class ARPathTransformer(nn.Module):
         rx: torch.Tensor,
         wall_feats: torch.Tensor,
         wall_mask: torch.Tensor,
+        corner_feats: torch.Tensor | None = None,
+        corner_mask: torch.Tensor | None = None,
     ) -> torch.Tensor:
-        scene, wall_embed = self.encoder(channels, tx, rx, wall_feats)
-        tok = self.mixer(tokens, wall_embed)
+        scene, wall_embed, corner_embed = self.encoder(
+            channels, tx, rx, wall_feats, corner_feats
+        )
+        if corner_mask is None:
+            corner_mask = wall_mask.new_zeros(wall_mask.size(0), corner_embed.size(1))
+        tok = self.mixer(tokens, wall_embed, corner_embed)
         prefix = self.scene_token(scene).unsqueeze(1)
         x = torch.cat([prefix, tok], dim=1)
         ttot = x.size(1)
         mask = causal_mask(ttot, x.device)
         h = self.norm(self.tr(x, mask=mask))
-        h_tok = h[:, 1:, :]  # drop scene prefix
-        return self.logits_from_hidden(h_tok, wall_embed, wall_mask)
+        h_tok = h[:, 1:, :]
+        return self.logits_from_hidden(h_tok, wall_embed, wall_mask, corner_embed, corner_mask)
 
     @torch.no_grad()
     def greedy_decode(
@@ -102,11 +134,9 @@ class ARPathTransformer(nn.Module):
         wall_mask: torch.Tensor,
         force_first: torch.Tensor | None = None,
         max_bounces: int = MAX_BOUNCES,
+        corner_feats: torch.Tensor | None = None,
+        corner_mask: torch.Tensor | None = None,
     ) -> torch.Tensor:
-        """Greedy AR. force_first: [B] wall token ids (not TX/PAD) or -1 to skip.
-
-        Returns tokens [B, MAX_SEQ_LEN] starting with TX, ending with RX/PAD.
-        """
         b = channels.size(0)
         device = channels.device
         seq = torch.full((b, MAX_SEQ_LEN), PAD_ID, device=device, dtype=torch.long)
@@ -114,7 +144,16 @@ class ARPathTransformer(nn.Module):
         finished = torch.zeros(b, dtype=torch.bool, device=device)
         cur_len = 1
         for step in range(max_bounces + 1):
-            logits = self.forward(seq[:, :cur_len], channels, tx, rx, wall_feats, wall_mask)
+            logits = self.forward(
+                seq[:, :cur_len],
+                channels,
+                tx,
+                rx,
+                wall_feats,
+                wall_mask,
+                corner_feats,
+                corner_mask,
+            )
             last = logits[:, -1, :]
             if step == 0 and force_first is not None:
                 use = force_first >= 0
@@ -154,9 +193,15 @@ class OneShotPathModel(nn.Module):
         wall_feats: torch.Tensor,
         wall_mask: torch.Tensor,
         tokens: torch.Tensor | None = None,
+        corner_feats: torch.Tensor | None = None,
+        corner_mask: torch.Tensor | None = None,
     ) -> torch.Tensor:
-        del tokens  # unused; interface-compatible with AR
-        scene, wall_embed = self.encoder(channels, tx, rx, wall_feats)
+        del tokens
+        scene, wall_embed, corner_embed = self.encoder(
+            channels, tx, rx, wall_feats, corner_feats
+        )
+        if corner_mask is None:
+            corner_mask = wall_mask.new_zeros(wall_mask.size(0), corner_embed.size(1))
         b = scene.size(0)
         q = self.slots.unsqueeze(0).expand(b, -1, -1)
         q = self.slot_mlp(torch.cat([q, scene.unsqueeze(1).expand(-1, self.n_slots, -1)], dim=-1))
@@ -165,6 +210,9 @@ class OneShotPathModel(nn.Module):
         wall_scores = torch.einsum("bld,bwd->blw", q, wall_embed)
         wall_scores = wall_scores.masked_fill(wall_mask.unsqueeze(1) < 0.5, -1e9)
         logits[:, :, VOCAB_WALL_OFFSET : VOCAB_WALL_OFFSET + MAX_WALLS] = wall_scores
+        corner_scores = torch.einsum("bld,bcd->blc", q, corner_embed)
+        corner_scores = corner_scores.masked_fill(corner_mask.unsqueeze(1) < 0.5, -1e9)
+        logits[:, :, VOCAB_DIFFRACT_OFFSET : VOCAB_DIFFRACT_OFFSET + MAX_CORNERS] = corner_scores
         return logits
 
     @torch.no_grad()
@@ -176,8 +224,13 @@ class OneShotPathModel(nn.Module):
         wall_feats: torch.Tensor,
         wall_mask: torch.Tensor,
         force_first: torch.Tensor | None = None,
+        corner_feats: torch.Tensor | None = None,
+        corner_mask: torch.Tensor | None = None,
     ) -> torch.Tensor:
-        logits = self.forward(channels, tx, rx, wall_feats, wall_mask)
+        logits = self.forward(
+            channels, tx, rx, wall_feats, wall_mask,
+            corner_feats=corner_feats, corner_mask=corner_mask,
+        )
         pred_slots = logits.argmax(dim=-1)  # B, n_slots
         if force_first is not None:
             use = force_first >= 0
