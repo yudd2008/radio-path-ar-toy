@@ -25,28 +25,41 @@ from models.transformer_seq import build_serious_transformer, count_parameters
 
 # Documented recipe. Overrides belong on the CLI / saved config, not here.
 TRAIN_DEFAULTS = {
-    "lr": 1e-3,
+    "lr": 2e-3,
     "min_lr": 1e-5,
-    "weight_decay": 0.01,
+    "weight_decay": 1e-4,
+    "dropout": 0.05,
     "batch_size": 64,
-    "max_epochs": 160,
-    "min_epochs": 40,
-    "patience": 30,
-    "warmup_epochs": 8,
+    "max_epochs": 140,
+    "min_epochs": 48,
+    "patience": 24,
+    "warmup_epochs": 5,
     "grad_clip": 1.0,
     "betas": (0.9, 0.98),
     "loss_plateau_tol": 0.02,
     "loss_plateau_window": 10,
+    # Unweighted CE collapses to "emit RX" at hop 2, because one-bounce paths
+    # (second token = RX) outnumber multi-bounce continuations. Upweight
+    # R_wall / D_corner targets so those tokens are actually fit. RX stays 1.
+    "interaction_token_weight": 3.0,
+    "selection": "val teacher-forced next-token accuracy on n_bounces>=2",
 }
 
 
-def token_loss(logits: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
+def token_loss(logits: torch.Tensor, target: torch.Tensor, interaction_weight: float = 1.0) -> torch.Tensor:
+    """Cross-entropy over non-PAD tokens. Interaction tokens can be upweighted."""
     b, t, v = logits.shape
-    return F.cross_entropy(
+    raw = F.cross_entropy(
         logits.reshape(b * t, v),
         target.reshape(b * t),
         ignore_index=PAD_ID,
-    )
+        reduction="none",
+    ).view(b, t)
+    weights = torch.ones_like(raw)
+    if interaction_weight != 1.0:
+        weights = torch.where(target >= 3, torch.full_like(weights, float(interaction_weight)), weights)
+    weights = torch.where(target == PAD_ID, torch.zeros_like(weights), weights)
+    return (raw * weights).sum() / weights.sum().clamp(min=1.0)
 
 
 def _move(batch: dict, dev: torch.device) -> dict:
@@ -95,14 +108,14 @@ def _set_lr(opt: torch.optim.Optimizer, lr: float) -> None:
         group["lr"] = lr
 
 
-def train_one_epoch(model, loader, opt, dev) -> float:
+def train_one_epoch(model, loader, opt, dev, interaction_weight: float) -> float:
     model.train()
     total, n = 0.0, 0
     for batch in loader:
         batch = _move(batch, dev)
         opt.zero_grad(set_to_none=True)
         tgt = batch["tokens"][:, 1:]
-        loss = token_loss(sequence_logits(model, batch), tgt)
+        loss = token_loss(sequence_logits(model, batch), tgt, interaction_weight)
         if not torch.isfinite(loss):
             raise RuntimeError("non-finite training loss")
         loss.backward()
@@ -155,6 +168,15 @@ def eval_loader(model, loader, dev) -> dict:
     }
 
 
+def _hop2_plateaued(hist: list[dict], window: int, tol: float = 0.01) -> bool:
+    """True when train hop-2 accuracy on n_bounces≥2 has stopped rising."""
+    if len(hist) < 2 * window:
+        return False
+    prev = max(row["train_hop_acc"][1] for row in hist[-2 * window : -window])
+    recent = max(row["train_hop_acc"][1] for row in hist[-window:])
+    return recent <= prev + tol
+
+
 def _loss_plateaued(hist: list[dict], window: int, tol: float) -> bool:
     losses = [row["train_loss"] for row in hist]
     if len(losses) < 2 * window:
@@ -174,17 +196,17 @@ def _save_curves(hist: list[dict], best_epoch: int, path: Path) -> None:
 
     epochs = [row["epoch"] for row in hist]
     fig, axes = plt.subplots(1, 2, figsize=(8.4, 3.6))
-    axes[0].plot(epochs, [row["train_loss"] for row in hist], label="train loss")
-    axes[0].plot(epochs, [row["val_loss"] for row in hist], label="val loss")
+    axes[0].plot(epochs, [row["train_loss"] for row in hist], label="train loss (weighted)")
+    axes[0].plot(epochs, [row["val_loss"] for row in hist], label="val loss (unweighted, ≥2)")
     axes[0].axvline(best_epoch, color="0.4", ls="--", lw=1, label=f"best epoch {best_epoch}")
     axes[0].set_xlabel("epoch")
-    axes[0].set_ylabel("cross-entropy")
+    axes[0].set_ylabel("weighted cross-entropy")
     axes[0].grid(True, alpha=0.3)
     axes[0].legend(fontsize=8)
-    axes[0].set_title("Transformer loss")
-    axes[1].plot(epochs, [row["train_tf_acc"] for row in hist], label="train TF acc")
-    axes[1].plot(epochs, [row["val_tf_acc"] for row in hist], label="val TF acc")
-    axes[1].plot(epochs, [row["val_tf_exact"] for row in hist], label="val TF exact")
+    axes[0].set_title("Train loss (interaction-weighted)")
+    axes[1].plot(epochs, [row["train_tf_acc"] for row in hist], label="train TF acc ≥2")
+    axes[1].plot(epochs, [row["val_tf_acc"] for row in hist], label="val TF acc ≥2")
+    axes[1].plot(epochs, [row.get("val_hop2", float("nan")) for row in hist], label="val hop2 ≥2")
     axes[1].axvline(best_epoch, color="0.4", ls="--", lw=1)
     axes[1].set_xlabel("epoch")
     axes[1].set_ylim(-0.05, 1.05)
@@ -211,20 +233,19 @@ def run_training(
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
     train_ds = PathNPZDataset(npz, split="train")
-    val_ds = PathNPZDataset(npz, split="val")
+    val_ds = PathNPZDataset(npz, split="val", min_bounces=2)
     g = torch.Generator()
     g.manual_seed(seed)
-    train_loader = DataLoader(
-        train_ds,
-        batch_size=int(TRAIN_DEFAULTS["batch_size"]),
-        shuffle=True,
-        generator=g,
+    bs = int(TRAIN_DEFAULTS["batch_size"])
+    train_loader = DataLoader(train_ds, batch_size=bs, shuffle=True, generator=g)
+    # Eval-mode passes so plotted accuracy is not depressed by dropout.
+    train_eval_loader = DataLoader(
+        PathNPZDataset(npz, split="train", min_bounces=2), batch_size=bs, shuffle=False
     )
-    # Eval-mode pass so the plotted train accuracy is not depressed by dropout.
-    train_eval_loader = DataLoader(train_ds, batch_size=int(TRAIN_DEFAULTS["batch_size"]), shuffle=False)
-    val_loader = DataLoader(val_ds, batch_size=int(TRAIN_DEFAULTS["batch_size"]), shuffle=False)
+    val_loader = DataLoader(val_ds, batch_size=bs, shuffle=False)
+    interaction_weight = float(TRAIN_DEFAULTS["interaction_token_weight"])
 
-    model = build_serious_transformer().to(dev)
+    model = build_serious_transformer({"dropout": float(TRAIN_DEFAULTS["dropout"])}).to(dev)
     n_params = count_parameters(model)
     opt = torch.optim.AdamW(
         adamw_groups(model, float(TRAIN_DEFAULTS["weight_decay"])),
@@ -247,7 +268,7 @@ def run_training(
     for ep in tqdm(range(1, epochs + 1), desc="train[serious_transformer]"):
         lr = lr_at_epoch(ep, epochs, warmup, max_lr, min_lr)
         _set_lr(opt, lr)
-        tr_loss = train_one_epoch(model, train_loader, opt, dev)
+        tr_loss = train_one_epoch(model, train_loader, opt, dev, interaction_weight)
         tr_metrics = eval_loader(model, train_eval_loader, dev)
         va = eval_loader(model, val_loader, dev)
         row = {
@@ -256,10 +277,12 @@ def run_training(
             "train_loss": tr_loss,
             "train_tf_acc": tr_metrics["tf_acc"],
             "train_tf_exact": tr_metrics["tf_exact"],
+            "train_hop_acc": tr_metrics["hop_acc"],
             "val_loss": va["loss"],
             "val_tf_acc": va["tf_acc"],
             "val_tf_exact": va["tf_exact"],
             "val_hop_acc": va["hop_acc"],
+            "val_hop2": va["hop_acc"][1],
         }
         hist.append(row)
         improved = va["tf_acc"] > best + 1e-6
@@ -273,7 +296,7 @@ def run_training(
         hops = " ".join(f"h{k+1}={va['hop_acc'][k]:.3f}" for k in range(4))
         tqdm.write(
             f"epoch {ep:03d}  lr {lr:.2e}  train_loss {tr_loss:.4f}  "
-            f"train_tf {tr_metrics['tf_acc']:.3f}  val_loss {va['loss']:.4f}  "
+            f"train_tf {tr_metrics['tf_acc']:.3f}  train_h2 {tr_metrics['hop_acc'][1]:.3f}  "
             f"val_tf {va['tf_acc']:.3f}  val_exact {va['tf_exact']:.3f}  {hops}"
         )
         loss_flat = _loss_plateaued(
@@ -281,15 +304,14 @@ def run_training(
             int(TRAIN_DEFAULTS["loss_plateau_window"]),
             float(TRAIN_DEFAULTS["loss_plateau_tol"]),
         )
-        if ep >= min_epochs and stall >= patience and loss_flat:
+        hop2_flat = _hop2_plateaued(hist, int(TRAIN_DEFAULTS["loss_plateau_window"]))
+        if ep >= min_epochs and stall >= patience and loss_flat and hop2_flat:
             stop_reason = "val_patience_and_train_loss_plateau"
             break
-        if ep >= min_epochs and stall >= patience and not loss_flat:
-            # Validation has stopped improving. Keep going only while train
-            # loss is still moving, and not past an extra patience window.
-            if stall >= patience * 2:
-                stop_reason = "val_patience_train_loss_still_moving"
-                break
+        if ep >= min_epochs and stall >= patience * 2:
+            # Validation has stopped improving for a long stretch.
+            stop_reason = "val_patience_exceeded"
+            break
 
     last_state = {k: v.detach().cpu().clone() for k, v in model.state_dict().items()}
     last_epoch = int(hist[-1]["epoch"]) if hist else 0
@@ -315,6 +337,7 @@ def run_training(
         "n_params": n_params,
         "n_train": len(train_ds),
         "n_val": len(val_ds),
+        "n_val_population": "n_bounces>=2",
         "seed": seed,
         "train_defaults": {
             k: (list(v) if isinstance(v, tuple) else v) for k, v in TRAIN_DEFAULTS.items()

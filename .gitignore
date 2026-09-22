@@ -15,6 +15,9 @@ venv/
 data/generated/
 *.pt
 *.pth
+!artifacts/transformer_seq/best.pt
+!artifacts/ar_weighted/best.pt
+!results/ckpts/ar_transformer.pt
 !results/.gitkeep
 .idea/
 .vscode/

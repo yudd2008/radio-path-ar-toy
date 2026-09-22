@@ -19,6 +19,7 @@ if str(ROOT) not in sys.path:
 from data.generate import generate_dataset
 from experiments.common import seed_all
 from experiments.eval_transformer import run_comparison
+from experiments.train_matched_ar import run_training as train_weighted_ar
 from experiments.train_sequence import run_training as train_ar
 from experiments.train_transformer import run_training as train_transformer
 
@@ -36,6 +37,7 @@ def main():
     p.add_argument("--skip-data", action="store_true")
     p.add_argument("--skip-ar", action="store_true")
     p.add_argument("--skip-transformer", action="store_true")
+    p.add_argument("--skip-weighted-ar", action="store_true")
     args = p.parse_args()
 
     seed_all(args.seed)
@@ -64,6 +66,11 @@ def main():
         )
         print("AR val_tf_acc", ar_stats["ar_transformer"]["val_tf_acc"])
 
+    weighted_dir = Path("artifacts/ar_weighted")
+    if not args.skip_weighted_ar:
+        w_stats = train_weighted_ar(str(data_dir / "dataset.npz"), str(weighted_dir), seed=args.seed)
+        print("weighted AR:", json.dumps(w_stats))
+
     tfm_dir = Path("artifacts/transformer_seq")
     if not args.skip_transformer:
         tfm_stats = train_transformer(
@@ -83,6 +90,7 @@ def main():
         str(tfm_dir / "best.pt"),
         str(out),
         seed=args.seed,
+        ar_weighted_ckpt=str(weighted_dir / "best.pt"),
     )
     print("wrote", out / "transformer_comparison.json")
     print("n_eval", payload["n_eval"])

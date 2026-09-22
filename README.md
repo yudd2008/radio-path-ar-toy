@@ -125,7 +125,7 @@ PYTHONPATH=. python3 -m experiments.run_all --seed 0 --out results
 
 ### Transformer 序列基线（更强的 AR 对照，不是新的 GT）
 
-研究问题仍然是：传播路径适不适合当作普通自回归序列。仓库里原来的 `ARPathTransformer`（d=64、2 层、16 epoch、恒定学习率、无位置编码）保持不动，当作普通 AR。`SeriousPathTransformer` 是同一条件上的因果 decoder：同样的场景特征、`R_wall_k` / `D_corner_c` token、seed=0 的 240/50/70 划分，以及同一套第一跳干预（teacher-forcing、free-run、oracle 第一跳、模型第二候选、随机已有墙/角点）。差别是容量（d=128、4 层 pre-norm、学习位置编码、4×FFN）和训练（warmup + cosine、weight decay、dropout、按验证集 teacher-forced next-token accuracy 选 checkpoint，直到验证指标和训练 loss 平台或达到上限）。镜像法路径仍是 ground truth；Transformer 不生成 GT。
+研究问题仍然是：传播路径适不适合当作普通自回归序列。仓库里原来的 `ARPathTransformer`（d=64、2 层、16 epoch、恒定学习率、无位置编码）保持不动，当作普通 AR。`SeriousPathTransformer` 是同一条件上的因果 decoder：同样的场景特征、`R_wall_k` / `D_corner_c` token、seed=0 的 240/50/70 划分，以及同一套第一跳干预（teacher-forcing、free-run、oracle 第一跳、模型第二候选、随机已有墙/角点）。差别是容量（d=128、4 层 pre-norm、学习位置编码、4×FFN）和训练（warmup + cosine、weight decay、dropout、交互 token 损失权重 3、按 **n_bounces≥2** 验证集 teacher-forced next-token accuracy 选 checkpoint，直到该指标和训练 loss / hop2 平台或达到上限）。不加权的交叉熵会把 hop2 收成「输出 RX」，因为 1-bounce 路径的第二 token 就是 RX；这个权重只加在 Transformer 上，普通 AR 仍用仓库原来的不加权配方。镜像法路径仍是 ground truth；Transformer 不生成 GT。
 
 ```bash
 PYTHONPATH=. python3 -m experiments.run_transformer_baseline --seed 0
@@ -142,7 +142,9 @@ PYTHONPATH=. python3 -m experiments.eval_transformer \
 
 测量写在 `results/transformer_comparison.json`、`results/findings.md` 的 Transformer 一节，以及 `results/figures/transformer_vs_ar_hop_accuracy.png`。训练曲线在 `results/figures/transformer_train_curves.png`。超参以 checkpoint 里的 `config` / `train_defaults` 为准。
 
-English: the scientific question is still whether ordinary autoregressive free-run is a fit for multipath interaction sequences. The Transformer is a stronger sequence-model foil under the same data and the same first-hop corruption protocol, not a replacement for the image method.
+这次 seed=0 重抽样的测量（n=261 条 `n_bounces≥2` 测试路径，与仓库里旧的 n=204 表不是同一次数据）写在 [`results/findings.md`](results/findings.md)。简要结果：原配方小 AR 的第二跳几乎总是 RX（TF hop2 0.011）。交互 token 加权之后，小 AR 与 4 层 Transformer 的 TF hop2 都在 0.4 左右，free-run exact 都是 0.126；第一跳换成第二候选后 exact 都是 0，随机非法第一跳都会把几何合法率打到约 0.17。更大的 Transformer 没有改变「普通 free-run 不适合这些路径」的结论。Ground truth 仍是镜像法。
+
+English: the scientific question is still whether ordinary autoregressive free-run is a fit for multipath interaction sequences. The Transformer is a stronger sequence-model foil under the same data and the same first-hop corruption protocol, not a replacement for the image method. On the fresh seed-0 draw, matching the interaction-token loss weight lets the small AR learn the second hop about as well as the larger Transformer; corrupting the first hop still destroys exact match to the labeled path for both.
 
 样本 schema 见生成后的 `data/generated/schema_example.json`。
 
