@@ -146,6 +146,118 @@ def _hop_flags(pred: np.ndarray, gt: np.ndarray, n_hops: int) -> list[int]:
     return flags
 
 
+PROTOCOL_TAGS = ("tf", "freerun", "oracle_first", "interv_2nd", "interv_rand")
+
+
+def pack_protocol(stats: dict) -> dict:
+    """Mean rates + hop table for the shared AR intervention tags."""
+    summary = {k: _mean(v) for k, v in stats.items() if k != "n_bounces"}
+    summary["n_eval"] = len(stats.get("n_bounces", []))
+    summary["mean_n_bounces"] = _mean(stats.get("n_bounces", []))
+    hop_table = {}
+    for tag in PROTOCOL_TAGS:
+        hop_table[tag] = {
+            "exact": summary.get(f"{tag}_exact", float("nan")),
+            "valid": summary.get(f"{tag}_valid", float("nan")),
+            "later_acc": summary.get(f"{tag}_later_acc", float("nan")),
+            "later_wall_acc": summary.get(f"{tag}_later_wall_acc", float("nan")),
+            "hop2_wall": summary.get(f"{tag}_hop2_wall", float("nan")),
+            "any_scene_path": summary.get(f"{tag}_any_scene_path", float("nan")),
+            "pred_nbounces": summary.get(f"{tag}_pred_nbounces", float("nan")),
+            "xy_mean": summary.get(f"{tag}_xy_mean", float("nan")),
+            "hops": [summary.get(f"{tag}_hop{k}_acc", float("nan")) for k in range(1, MAX_BOUNCES + 2)],
+            "xy_hops": [summary.get(f"{tag}_xy_hop{k}", float("nan")) for k in range(1, MAX_BOUNCES + 2)],
+        }
+    return {"summary": summary, "hop_table": hop_table}
+
+
+@torch.no_grad()
+def score_sequence_model(model, loader, json_index, rng, dev=None) -> dict:
+    """Teacher-forcing, free-run, and first-hop corruption for one sequence model.
+
+    Same definitions as the AR branch of ``eval_discrete``:
+    teacher-forced hop accuracy, greedy free-run, oracle first interaction,
+    forced second-best first interaction, and a random existing wall/corner
+    that is not the labeled first hop. ``rng`` should be a fresh generator
+    created with the experiment seed (``seed + 7``) so both models see the
+    same illegal first hops.
+    """
+    if dev is None:
+        dev = torch.device("cpu")
+    model = model.to(dev)
+    model.eval()
+    stats = defaultdict(list)
+    scene_path_set: dict[int, set[tuple[tuple[str, int], ...]]] = defaultdict(set)
+    for rec in json_index.values():
+        scene_path_set[int(rec["scene_id"])].add(tuple(interactions_from_rec(rec)))
+
+    for batch in loader:
+        bsz = batch["tokens"].size(0)
+        tokens = batch["tokens"]
+        enc = _enc_kwargs(batch)
+        enc = {k: (v.to(dev) if torch.is_tensor(v) else v) for k, v in enc.items()}
+        logits = model(tokens[:, :-1].to(dev), **enc)
+        tf_pred = logits.argmax(dim=-1)
+        second = _second_choice_first_token(model, batch, dev)
+        rnd = _random_wrong_first(batch, rng)
+        free = model.greedy_decode(**enc)
+        oracle = model.greedy_decode(**enc, force_first=tokens[:, 1].to(dev))
+        interv = model.greedy_decode(**enc, force_first=second)
+        interv_rand = model.greedy_decode(**enc, force_first=rnd.to(dev))
+        first_logits = model(tokens[:, :1].to(dev), **enc)[:, -1, :]
+        top2 = first_logits.topk(k=2, dim=-1).indices
+        gt_first = tokens[:, 1].to(dev)
+
+        for i in range(bsz):
+            gt = _as_numpy_seq(tokens[i])
+            nb = int(batch["n_bounces"][i].item())
+            sid = int(batch["scene_id"][i].item())
+            pid = int(batch["path_id"][i].item())
+            rec = json_index[(sid, pid)]
+            scene = scene_from_json(rec)
+            gt_pts = np.array(rec["points"], dtype=np.float64)
+            n_tgt = int((gt[1:] != PAD_ID).sum())
+
+            def consume(tag: str, pred_seq: np.ndarray, start_hop: int = 1):
+                flags = _hop_flags(pred_seq, gt, n_tgt)
+                for k, f in enumerate(flags, start=1):
+                    stats[f"{tag}_hop{k}_acc"].append(f)
+                stats[f"{tag}_exact"].append(int(np.array_equal(pred_seq[: n_tgt + 1], gt[: n_tgt + 1])))
+                later = flags[start_hop:]
+                if later:
+                    stats[f"{tag}_later_acc"].append(float(np.mean(later)))
+                if nb >= 2 and len(flags) >= 2:
+                    stats[f"{tag}_later_wall_acc"].append(float(np.mean(flags[1:nb])))
+                if nb >= 2 and len(flags) >= 2:
+                    stats[f"{tag}_hop2_wall"].append(float(flags[1]))
+                valid, pts, inter = validity_and_points(scene, pred_seq)
+                stats[f"{tag}_valid"].append(int(valid))
+                stats[f"{tag}_pred_nbounces"].append(len(inter))
+                stats[f"{tag}_any_scene_path"].append(int(tuple(inter) in scene_path_set[sid]))
+                if pts is not None:
+                    n = min(len(pts), len(gt_pts))
+                    err = [float(np.linalg.norm(pts[j] - gt_pts[j])) for j in range(1, n)]
+                    for j, e in enumerate(err, start=1):
+                        stats[f"{tag}_xy_hop{j}"].append(e)
+                    stats[f"{tag}_xy_mean"].append(float(np.mean(err)) if err else 0.0)
+                else:
+                    stats[f"{tag}_xy_mean"].append(float("nan"))
+                return valid, pts, inter, flags
+
+            tf_seq = gt.copy()
+            tf_seq[1:] = _as_numpy_seq(tf_pred[i])
+            consume("tf", tf_seq)
+            consume("freerun", _as_numpy_seq(free[i]))
+            consume("oracle_first", _as_numpy_seq(oracle[i]))
+            consume("interv_2nd", _as_numpy_seq(interv[i]))
+            consume("interv_rand", _as_numpy_seq(interv_rand[i]))
+            stats["first_token_tf"].append(int(int(tf_pred[i, 0]) == int(gt[1])))
+            stats["first_token_free"].append(int(int(free[i, 1]) == int(gt[1])))
+            stats["first_token_top2"].append(int(bool((top2[i] == gt_first[i]).any().item())))
+            stats["n_bounces"].append(nb)
+    return pack_protocol(stats)
+
+
 @torch.no_grad()
 def eval_discrete(ar, oneshot, loader, json_index, rng, fig_dir: Path) -> dict:
     stats = defaultdict(list)

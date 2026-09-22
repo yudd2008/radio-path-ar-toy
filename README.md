@@ -98,7 +98,7 @@ RadioUNet（Levie 等）是典型的 CNN **判别式** 无线电地图估计。R
 env/          轴对齐矩形障碍、稳定 wall/corner ID、占用栅格
 pathfind/     镜像法镜面反射 + 矩形角点绕射（Keller/UTD 存在性玩具）
 data/         JSONL+NPZ（几何、R/D token、连续点、合法性）
-models/       小 AR Transformer、one-shot 序列头、联合回归 / AR-t / 小 DDPM
+models/       小 AR Transformer、认真训练的因果 Transformer 对照、one-shot 序列头、联合回归 / AR-t / 小 DDPM
 experiments/  训练 + 强制改第一跳的误差累积实验 + 反射/绕射展示图
 ```
 
@@ -121,7 +121,28 @@ PYTHONPATH=. python3 -m experiments.run_all --seed 0 --out results
 
 只看反射+绕射几何（不训练）：`python3 -m experiments.demo_reflect_diffract --out results/figures`。
 
-默认 CPU：生成小数据集（约 240/50/70 个场景）→ 训练很小的模型 → 写出 `results/metrics.json`、`results/findings.md` 和 `results/figures/`。整段 demo 大约一分钟量级。
+默认 CPU：生成小数据集（约 240/50/70 个场景）→ 训练很小的模型 → 写出 `results/metrics.json`、`results/findings.md` 和 `results/figures/`。整段 demo 大约一分钟量级。它**不**训练下面的 Transformer 对照。
+
+### Transformer 序列基线（更强的 AR 对照，不是新的 GT）
+
+研究问题仍然是：传播路径适不适合当作普通自回归序列。仓库里原来的 `ARPathTransformer`（d=64、2 层、16 epoch、恒定学习率、无位置编码）保持不动，当作普通 AR。`SeriousPathTransformer` 是同一条件上的因果 decoder：同样的场景特征、`R_wall_k` / `D_corner_c` token、seed=0 的 240/50/70 划分，以及同一套第一跳干预（teacher-forcing、free-run、oracle 第一跳、模型第二候选、随机已有墙/角点）。差别是容量（d=128、4 层 pre-norm、学习位置编码、4×FFN）和训练（warmup + cosine、weight decay、dropout、按验证集 teacher-forced next-token accuracy 选 checkpoint，直到验证指标和训练 loss 平台或达到上限）。镜像法路径仍是 ground truth；Transformer 不生成 GT。
+
+```bash
+PYTHONPATH=. python3 -m experiments.run_transformer_baseline --seed 0
+```
+
+只从 checkpoint 重算对比、不重新训练：
+
+```bash
+PYTHONPATH=. python3 -m experiments.eval_transformer \
+  --ar-ckpt results/ckpts/ar_transformer.pt \
+  --ckpt artifacts/transformer_seq/best.pt \
+  --out results
+```
+
+测量写在 `results/transformer_comparison.json`、`results/findings.md` 的 Transformer 一节，以及 `results/figures/transformer_vs_ar_hop_accuracy.png`。训练曲线在 `results/figures/transformer_train_curves.png`。超参以 checkpoint 里的 `config` / `train_defaults` 为准。
+
+English: the scientific question is still whether ordinary autoregressive free-run is a fit for multipath interaction sequences. The Transformer is a stronger sequence-model foil under the same data and the same first-hop corruption protocol, not a replacement for the image method.
 
 样本 schema 见生成后的 `data/generated/schema_example.json`。
 

@@ -123,6 +123,12 @@ WinProp IRT 文档写明预测阶段会递归检查 **反射/绕射** 条件；�
 
 ---
 
+## 5b. 更强的 Transformer 只作为序列模型对照
+
+仓库里的普通 AR 本身就是一个很小的因果 Transformer。`SeriousPathTransformer` 使用同一套 token、场景特征、seed=0 划分和第一跳干预协议（`experiments.ar_intervention.score_sequence_model`），容量和训练更完整，用来回答「是不是小模型没训够」。它仍然是 \(p(\text{next}\mid\text{prefix},\text{scene})\)，不是可见性树搜索，也不生成镜像法 GT。
+
+测量只来自 `experiments.run_transformer_baseline` / `experiments.eval_transformer` 写出的 `results/findings.md` 与 `results/transformer_comparison.json`。本节不另抄一套数字。
+
 ## 6. 明确不做的事
 
 - 不实现 WinProp 的工业预处理数据库、3D、tile 中心近似、完整 UTD 系数或 Keller 锥。

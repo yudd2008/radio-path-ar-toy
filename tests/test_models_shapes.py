@@ -18,7 +18,11 @@ from data.schema import (
     VOCAB_WALL_OFFSET,
 )
 from models.continuous import ARPointModel, JointPointRegressor, TinyPointDDPM
+import torch.nn.functional as F
+
+from experiments.train_transformer import lr_at_epoch
 from models.sequence import ARPathTransformer, OneShotPathModel
+from models.transformer_seq import SeriousPathTransformer
 
 
 def _batch(b: int = 3):
@@ -150,7 +154,81 @@ def test_oneshot_and_continuous():
     assert sample.shape == b["t_on_wall"].shape
 
 
+def _forward_serious(model, batch, tokens):
+    return model(
+        tokens,
+        batch["channels"],
+        batch["tx"],
+        batch["rx"],
+        batch["wall_feats"],
+        batch["wall_mask"],
+        batch["corner_feats"],
+        batch["corner_mask"],
+    )
+
+
+def test_serious_transformer_causal_decode_and_step():
+    torch.manual_seed(0)
+    model = SeriousPathTransformer(d_model=32, nhead=4, nlayers=2, dropout=0.0, ff_mult=2)
+    model.eval()
+    batch = _batch()
+    logits = _forward_serious(model, batch, batch["tokens"][:, :-1])
+    assert logits.shape[0] == 3
+    assert logits.shape[-1] == VOCAB_SIZE
+    inp = batch["tokens"][:, :-1].clone()
+    logits_a = _forward_serious(model, batch, inp)
+    inp_b = inp.clone()
+    inp_b[:, -1] = VOCAB_WALL_OFFSET + 5
+    logits_b = _forward_serious(model, batch, inp_b)
+    assert torch.allclose(logits_a[:, 0], logits_b[:, 0], atol=1e-5)
+    assert not torch.allclose(logits_a[:, -1], logits_b[:, -1], atol=1e-5)
+    seq = model.greedy_decode(
+        batch["channels"],
+        batch["tx"],
+        batch["rx"],
+        batch["wall_feats"],
+        batch["wall_mask"],
+        corner_feats=batch["corner_feats"],
+        corner_mask=batch["corner_mask"],
+    )
+    assert seq.shape == batch["tokens"].shape
+    assert (seq[:, 0] == TX_ID).all()
+    forced = torch.full((3,), VOCAB_WALL_OFFSET + 3)
+    forced_seq = model.greedy_decode(
+        batch["channels"],
+        batch["tx"],
+        batch["rx"],
+        batch["wall_feats"],
+        batch["wall_mask"],
+        force_first=forced,
+        corner_feats=batch["corner_feats"],
+        corner_mask=batch["corner_mask"],
+    )
+    assert torch.equal(forced_seq[:, 1], forced)
+
+    model.train()
+    opt = torch.optim.AdamW(model.parameters(), lr=1e-3)
+    opt.zero_grad(set_to_none=True)
+    train_logits = _forward_serious(model, batch, batch["tokens"][:, :-1])
+    target = batch["tokens"][:, 1:]
+    loss = F.cross_entropy(train_logits.reshape(-1, VOCAB_SIZE), target.reshape(-1), ignore_index=0)
+    assert torch.isfinite(loss)
+    loss.backward()
+    opt.step()
+
+
+def test_lr_schedule_warmup_then_decay():
+    warmup = [lr_at_epoch(ep, 20, 4, 1e-3, 1e-5) for ep in range(1, 5)]
+    assert warmup[0] < warmup[-1]
+    mid = lr_at_epoch(12, 20, 4, 1e-3, 1e-5)
+    end = lr_at_epoch(20, 20, 4, 1e-3, 1e-5)
+    assert mid > end
+    assert abs(end - 1e-5) < 1e-8
+
+
 if __name__ == "__main__":
     test_ar_forward_and_decode()
     test_oneshot_and_continuous()
+    test_serious_transformer_causal_decode_and_step()
+    test_lr_schedule_warmup_then_decay()
     print("ok")
