@@ -6,9 +6,17 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from data.schema import MAX_BOUNCES, MAX_WALLS, VOCAB_WALL_OFFSET, WALL_FEAT_DIM
+from data.schema import (
+    CORNER_FEAT_DIM,
+    MAX_BOUNCES,
+    MAX_CORNERS,
+    MAX_WALLS,
+    VOCAB_DIFFRACT_OFFSET,
+    VOCAB_SIZE,
+    VOCAB_WALL_OFFSET,
+    WALL_FEAT_DIM,
+)
 
-VOCAB_SIZE = VOCAB_WALL_OFFSET + MAX_WALLS  # PAD, TX, RX, walls...
 D_MODEL = 64
 
 
@@ -34,6 +42,11 @@ class SceneEncoder(nn.Module):
             nn.ReLU(inplace=True),
             nn.Linear(d_model, d_model),
         )
+        self.corner_mlp = nn.Sequential(
+            nn.Linear(CORNER_FEAT_DIM + 4, d_model),
+            nn.ReLU(inplace=True),
+            nn.Linear(d_model, d_model),
+        )
 
     def forward(
         self,
@@ -41,15 +54,19 @@ class SceneEncoder(nn.Module):
         tx: torch.Tensor,
         rx: torch.Tensor,
         wall_feats: torch.Tensor,
-    ) -> tuple[torch.Tensor, torch.Tensor]:
-        """Returns (scene_vec [B,d], wall_embed [B,W,d])."""
+        corner_feats: torch.Tensor | None = None,
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        """Returns (scene_vec [B,d], wall_embed [B,W,d], corner_embed [B,C,d])."""
         h = self.cnn(channels).flatten(1)
         loc = torch.cat([tx, rx], dim=-1)
         scene = self.out(torch.cat([h, self.loc(loc)], dim=-1))
-        loc_exp = loc.unsqueeze(1).expand(-1, wall_feats.size(1), -1)
-        wall_in = torch.cat([wall_feats, loc_exp], dim=-1)
-        wall_embed = self.wall_mlp(wall_in)
-        return scene, wall_embed
+        loc_w = loc.unsqueeze(1).expand(-1, wall_feats.size(1), -1)
+        wall_embed = self.wall_mlp(torch.cat([wall_feats, loc_w], dim=-1))
+        if corner_feats is None:
+            corner_feats = wall_feats.new_zeros(wall_feats.size(0), MAX_CORNERS, CORNER_FEAT_DIM)
+        loc_c = loc.unsqueeze(1).expand(-1, corner_feats.size(1), -1)
+        corner_embed = self.corner_mlp(torch.cat([corner_feats, loc_c], dim=-1))
+        return scene, wall_embed, corner_embed
 
 
 def wall_slot_features(
@@ -63,6 +80,20 @@ def wall_slot_features(
     gather = wall_feats.gather(1, idx.unsqueeze(-1).expand(-1, -1, wall_feats.size(-1)))
     valid = (wall_ids >= 0) & (wall_ids < w)
     return gather * valid.unsqueeze(-1).float()
+
+
+def interaction_slot_features(
+    wall_feats: torch.Tensor,
+    corner_feats: torch.Tensor,
+    ids: torch.Tensor,
+    kinds: torch.Tensor,
+) -> torch.Tensor:
+    """kinds: 0=reflect (gather walls), 1=diffract (gather corners), -1=pad."""
+    wslots = wall_slot_features(wall_feats, torch.where(kinds == 0, ids, torch.zeros_like(ids)))
+    cslots = wall_slot_features(corner_feats, torch.where(kinds == 1, ids, torch.zeros_like(ids)))
+    r = (kinds == 0).unsqueeze(-1).float()
+    d = (kinds == 1).unsqueeze(-1).float()
+    return wslots * r + cslots * d
 
 
 class SinusoidalTime(nn.Module):

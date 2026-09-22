@@ -16,12 +16,14 @@ from env.scene import random_canyon_scene
 from env.viz import save_scene_paths
 from experiments.ar_intervention import run_experiment
 from experiments.common import seed_all
+from experiments.demo_reflect_diffract import save_showcase_figure
 from experiments.train_continuous import run_training as train_cont
 from experiments.train_sequence import run_training as train_seq
 from pathfind.image_method import find_paths
 
 
 def demo_gt_figure(seed: int, out: Path) -> None:
+    save_showcase_figure(out, nlos=True)
     rng = __import__("numpy").random.default_rng(seed)
     for k in range(80):
         scene = random_canyon_scene(rng, scene_id=k)
@@ -32,17 +34,25 @@ def demo_gt_figure(seed: int, out: Path) -> None:
         if not bounce:
             continue
         recs = [
-            {"points": p.points, "label": f"{p.n_bounces}-bounce {p.wall_ids}"}
+            {
+                "points": p.points,
+                "label": f"{p.mechanism()} {p.n_bounces}-int {_token_ids(p)}",
+                "mechanism": p.mechanism(),
+            }
             for p in paths[:4]
         ]
         save_scene_paths(
             scene,
             recs,
             out / "gt_paths_example.png",
-            title="Exact image-method paths (GT)",
+            title="Exact image-method + corner-diffraction paths (GT)",
             wall_labels=True,
         )
         return
+
+
+def _token_ids(path) -> str:
+    return ",".join(f"{k}{i}" for k, i in path.interactions) or "LoS"
 
 
 def main():
@@ -57,6 +67,7 @@ def main():
     p.add_argument("--cont-epochs", type=int, default=14)
     p.add_argument("--skip-data", action="store_true")
     p.add_argument("--skip-train", action="store_true")
+    p.add_argument("--skip-eval", action="store_true")
     args = p.parse_args()
 
     seed_all(args.seed)
@@ -82,6 +93,10 @@ def main():
         cont_stats = train_cont(str(data_dir / "dataset.npz"), str(ckpt), seed=args.seed, epochs=args.cont_epochs)
         print("seq val:", {k: v.get("val_tf_acc") for k, v in seq_stats.items()})
         print("cont val:", {k: v.get("val_rmse") for k, v in cont_stats.items()})
+
+    if args.skip_eval:
+        print("skip eval; showcase figure at", fig / "reflect_diffract_showcase.png")
+        return
 
     payload = run_experiment(
         str(data_dir / "dataset.npz"),

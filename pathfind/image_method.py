@@ -22,22 +22,58 @@ CORNER_MARGIN = 0.04
 # Incoming/outgoing must leave a little margin vs the wall tangent.
 NORMAL_DOT_MIN = 1e-6
 
+KIND_REFLECT = "R"
+KIND_DIFFRACT = "D"
+
 
 @dataclass
 class Path:
-    wall_ids: list[int]
-    points: np.ndarray  # (n_bounces+2, 2): Tx, interactions..., Rx
-    t_on_wall: np.ndarray  # (n_bounces,) in (0,1)
+    """A geometrically valid polyline: Tx, interactions, Rx.
+
+    `interactions` is a list of (kind, element_id) with kind in {R, D}:
+      R = specular reflection on wall_id, D = diffraction at corner_id.
+    """
+
+    interactions: list[tuple[str, int]]
+    points: np.ndarray  # (n_inter+2, 2): Tx, interactions..., Rx
+    t_on_wall: np.ndarray  # (n_inter,) in (0,1) for R, 0 for D
     length: float
     valid: bool = True
 
     @property
     def n_bounces(self) -> int:
-        return len(self.wall_ids)
+        return len(self.interactions)
+
+    @property
+    def n_interactions(self) -> int:
+        return len(self.interactions)
+
+    @property
+    def wall_ids(self) -> list[int]:
+        """Element ids in order (wall id if R, corner id if D)."""
+        return [eid for _, eid in self.interactions]
+
+    @property
+    def kinds(self) -> list[str]:
+        return [k for k, _ in self.interactions]
+
+    def mechanism(self) -> str:
+        ks = self.kinds
+        if not ks:
+            return "los"
+        if all(k == KIND_REFLECT for k in ks):
+            return "reflection"
+        if all(k == KIND_DIFFRACT for k in ks):
+            return "diffraction"
+        return "mixed"
 
     def tokens(self) -> list[str]:
         seq = ["TX"]
-        seq.extend(f"wall_{i}" for i in self.wall_ids)
+        for kind, eid in self.interactions:
+            if kind == KIND_DIFFRACT:
+                seq.append(f"D_corner_{eid}")
+            else:
+                seq.append(f"R_wall_{eid}")
         seq.append("RX")
         return seq
 
@@ -89,65 +125,30 @@ def reconstruct_path(
     wall_ids: Iterable[int],
     check_specular: bool = True,
 ) -> Optional[Path]:
-    """Try to realize a discrete wall sequence as a valid specular polyline.
+    """Reflection-only helper (all interactions are specular walls)."""
+    from pathfind.diffraction import KIND_REFLECT, reconstruct_interactions
 
-    Returns None if the sequence is geometrically invalid.
-    """
-    ids = [int(w) for w in wall_ids]
-    if any(i < 0 or i >= len(scene.walls) for i in ids):
-        return None
-    if any(ids[k] == ids[k + 1] for k in range(len(ids) - 1)):
-        return None
+    inter = [(KIND_REFLECT, int(w)) for w in wall_ids]
+    return reconstruct_interactions(scene, inter, check_specular=check_specular)
 
-    walls = [scene.walls[i] for i in ids]
-    tx, rx = scene.tx, scene.rx
-    if len(walls) == 0:
-        if scene.segment_occluded(tx, rx):
-            return None
-        pts = np.stack([tx, rx], axis=0)
-        return Path([], pts, np.zeros((0,), dtype=np.float64), polyline_length(pts), True)
 
-    images = _unfold_images(rx, walls)
-    points = [tx]
-    ts: list[float] = []
-    current = tx
-    for i, wall in enumerate(walls):
-        hit = wall.intersect_line(current, images[i])
-        if hit is None:
-            return None
-        t = wall.t_from_point(hit)
-        if t < CORNER_MARGIN or t > 1.0 - CORNER_MARGIN:
-            return None
-        # The unfolded target must lie across the mirror: hit is strictly
-        # between current and the image.
-        vec = images[i] - current
-        denom = float(np.dot(vec, vec))
-        if denom < EPS:
-            return None
-        u = float(np.dot(hit - current, vec) / denom)
-        if u <= EPS or u >= 1.0 - EPS:
-            return None
-        if not _outward_ok(wall, current, hit):
-            return None
-        if scene.segment_occluded(current, hit):
-            return None
-        points.append(hit)
-        ts.append(t)
-        current = hit
+def _labeled_elements(scene: Scene) -> list[tuple[str, int]]:
+    els = [(KIND_REFLECT, w.wall_id) for w in scene.walls]
+    els.extend((KIND_DIFFRACT, c.corner_id) for c in scene.corners)
+    return els
 
-    if not _outward_ok(walls[-1], rx, points[-1]):
-        return None
-    if scene.segment_occluded(points[-1], rx):
-        return None
-    points.append(rx)
-    pts = np.stack(points, axis=0)
 
-    if check_specular:
-        for i, wall in enumerate(walls):
-            if not specular_angles_ok(pts[i], pts[i + 1], pts[i + 2], wall):
-                return None
-
-    return Path(ids, pts, np.array(ts, dtype=np.float64), polyline_length(pts), True)
+def _pick_diverse(found: list[Path], max_paths: int) -> list[Path]:
+    groups = {"los": [], "reflection": [], "diffraction": [], "mixed": []}
+    for p in sorted(found, key=lambda q: (q.n_interactions, q.length)):
+        groups[p.mechanism()].append(p)
+    out: list[Path] = []
+    order = ["los", "reflection", "diffraction", "mixed"]
+    while len(out) < max_paths and any(groups[k] for k in order):
+        for k in order:
+            if groups[k] and len(out) < max_paths:
+                out.append(groups[k].pop(0))
+    return out
 
 
 def find_paths(
@@ -155,37 +156,36 @@ def find_paths(
     max_bounces: int = 3,
     max_paths: int = 12,
 ) -> list[Path]:
-    """Enumerate LoS + specular 1..max_bounces paths, shortest first."""
-    found: list[Path] = []
-    n_walls = len(scene.walls)
-    max_bounces = int(max(0, max_bounces))
+    """Enumerate LoS + specular + corner-diffracted paths, diverse then shortest."""
+    from pathfind.diffraction import reconstruct_interactions
 
-    los = reconstruct_path(scene, [])
+    found: list[Path] = []
+    max_bounces = int(max(0, max_bounces))
+    elements = _labeled_elements(scene)
+
+    los = reconstruct_interactions(scene, [])
     if los is not None:
         found.append(los)
 
-    # Breadth-by-bounce-count so 1-bounce and 2-bounce are complete even if
-    # 3-bounce enumeration is large. Consecutive identical walls are skipped.
-    prev_level: list[list[int]] = [[]]
-    for _bounce in range(1, max_bounces + 1):
-        nxt: list[list[int]] = []
+    prev_level: list[list[tuple[str, int]]] = [[]]
+    for _hop in range(1, max_bounces + 1):
+        nxt: list[list[tuple[str, int]]] = []
         for prefix in prev_level:
             last = prefix[-1] if prefix else None
-            for wid in range(n_walls):
-                if wid == last:
+            for lab in elements:
+                if lab == last:
                     continue
-                seq = prefix + [wid]
-                path = reconstruct_path(scene, seq)
+                seq = prefix + [lab]
+                path = reconstruct_interactions(scene, seq)
                 if path is not None:
                     found.append(path)
                 nxt.append(seq)
         prev_level = nxt
-    # Unique by wall sequence (reconstruction is deterministic).
-    uniq: dict[tuple[int, ...], Path] = {}
+
+    uniq: dict[tuple[tuple[str, int], ...], Path] = {}
     for p in found:
-        key = tuple(p.wall_ids)
+        key = tuple(p.interactions)
         prev = uniq.get(key)
         if prev is None or p.length < prev.length:
             uniq[key] = p
-    ordered = sorted(uniq.values(), key=lambda p: (p.n_bounces, p.length))
-    return ordered[:max_paths]
+    return _pick_diverse(list(uniq.values()), max_paths)

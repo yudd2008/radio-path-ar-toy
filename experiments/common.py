@@ -9,10 +9,9 @@ from pathlib import Path
 import numpy as np
 import torch
 
-from data.schema import decode_wall_ids
-from env.geometry import polyline_length
+from data.schema import decode_interactions
 from env.scene import Scene
-from pathfind.image_method import reconstruct_path
+from pathfind.diffraction import KIND_DIFFRACT, KIND_REFLECT, reconstruct_interactions
 
 
 def seed_all(seed: int) -> None:
@@ -39,27 +38,46 @@ def scene_from_json(rec: dict) -> Scene:
     return Scene.from_dict(rec)
 
 
+def interactions_from_rec(rec: dict) -> list[tuple[str, int]]:
+    if rec.get("interactions"):
+        return [(str(k), int(i)) for k, i in rec["interactions"]]
+    return [(KIND_REFLECT, int(w)) for w in rec.get("wall_ids") or []]
+
+
 def points_from_t(scene: Scene, wall_ids: list[int], t_on_wall) -> np.ndarray:
+    """Legacy: treat every id as a reflecting wall (no diffraction)."""
+    return points_from_interactions(
+        scene, [(KIND_REFLECT, int(w)) for w in wall_ids], t_on_wall
+    )
+
+
+def points_from_interactions(scene: Scene, interactions, t_on_wall) -> np.ndarray:
     pts = [scene.tx]
-    for wid, t in zip(wall_ids, list(t_on_wall)):
-        if wid < 0 or wid >= len(scene.walls):
+    tlist = list(t_on_wall)
+    for k, (kind, eid) in enumerate(interactions):
+        t = float(tlist[k]) if k < len(tlist) else 0.5
+        if kind == KIND_DIFFRACT and 0 <= eid < len(scene.corners):
+            pts.append(scene.corners[int(eid)].xy)
+        elif kind == KIND_REFLECT and 0 <= eid < len(scene.walls):
+            pts.append(scene.walls[int(eid)].point_from_t(t))
+        else:
             break
-        pts.append(scene.walls[int(wid)].point_from_t(float(t)))
     pts.append(scene.rx)
     return np.stack(pts, axis=0)
 
 
-def validity_and_points(scene: Scene, tokens) -> tuple[bool, np.ndarray | None, list[int]]:
-    wids = decode_wall_ids(tokens)
-    path = reconstruct_path(scene, wids)
+def validity_and_points(
+    scene: Scene, tokens
+) -> tuple[bool, np.ndarray | None, list[tuple[str, int]]]:
+    inter = decode_interactions(tokens)
+    path = reconstruct_interactions(scene, inter)
     if path is None:
-        return False, None, wids
-    return True, path.points, wids
+        return False, None, inter
+    return True, path.points, inter
 
 
 def hop_token_accuracy(pred: np.ndarray, gt: np.ndarray, max_hops: int = 4) -> list[float]:
-    """Accuracy at sequence hops after TX (wall1, wall2, ..., RX)."""
-    # pred/gt include TX at 0
+    """Accuracy at sequence hops after TX (interaction1, ..., RX)."""
     acc = []
     for k in range(1, max_hops + 1):
         if k >= len(pred) or k >= len(gt):

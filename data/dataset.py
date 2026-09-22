@@ -47,13 +47,29 @@ class PathNPZDataset(Dataset):
                 return torch.from_numpy(np.ascontiguousarray(arr)).float()
             return torch.from_numpy(np.ascontiguousarray(arr)).long()
 
-        bounce_mask = torch.zeros(self.data["t_on_wall"].shape[1], dtype=torch.float32)
+        n_slots = int(self.data["t_on_wall"].shape[1])
         nb = int(self.data["n_bounces"][i])
+        if "kinds" in self.data:
+            kinds = t("kinds")
+        else:
+            kinds = torch.full((n_slots,), -1, dtype=torch.long)
+            if nb > 0:
+                kinds[:nb] = 0
+        bounce_mask = torch.zeros(n_slots, dtype=torch.float32)
         if nb > 0:
             bounce_mask[:nb] = 1.0
+            # Diffraction vertices are the named corners; t is unused (stored 0).
+            bounce_mask = bounce_mask * (kinds != 1).float()
+        if "corner_feats" in self.data:
+            corner_feats = t("corner_feats")
+            corner_mask = t("corner_mask")
+        else:
+            corner_feats = torch.zeros(20, 6)
+            corner_mask = torch.zeros(20)
         return {
             "tokens": t("tokens"),
             "wall_ids": t("wall_ids"),
+            "kinds": kinds,
             "t_on_wall": t("t_on_wall"),
             "points": t("points"),
             "n_bounces": t("n_bounces"),
@@ -62,6 +78,8 @@ class PathNPZDataset(Dataset):
             "channels": t("channels"),
             "wall_feats": t("wall_feats"),
             "wall_mask": t("wall_mask"),
+            "corner_feats": corner_feats,
+            "corner_mask": corner_mask,
             "bounce_mask": bounce_mask,
             "is_shortest": t("is_shortest"),
             "scene_id": t("scene_id"),
