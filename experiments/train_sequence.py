@@ -107,6 +107,7 @@ def run_training(
     epochs: int = 18,
     batch_size: int = 32,
     lr: float = 2e-3,
+    only: tuple[str, ...] | None = None,
 ) -> dict:
     seed_all(seed)
     dev = device()
@@ -118,10 +119,13 @@ def run_training(
     val_loader = DataLoader(val_ds, batch_size=batch_size, shuffle=False)
 
     results = {}
-    for name, model, ar in [
+    specs = [
         ("ar_transformer", ARPathTransformer(), True),
         ("oneshot", OneShotPathModel(), False),
-    ]:
+    ]
+    if only is not None:
+        specs = [spec for spec in specs if spec[0] in only]
+    for name, model, ar in specs:
         opt = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=1e-4)
         best, best_state = -1.0, None
         hist = []

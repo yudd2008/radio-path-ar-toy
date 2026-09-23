@@ -26,6 +26,74 @@ def causal_mask(t: int, device: torch.device) -> torch.Tensor:
     return m
 
 
+def pointer_logits(
+    h: torch.Tensor,
+    rx_logits: torch.Tensor,
+    wall_embed: torch.Tensor,
+    wall_mask: torch.Tensor,
+    corner_embed: torch.Tensor,
+    corner_mask: torch.Tensor,
+) -> torch.Tensor:
+    """Score RX plus existing walls/corners. h [B,T,d] → logits [B,T,V]."""
+    b, tlen, _ = h.shape
+    logits = h.new_full((b, tlen, VOCAB_SIZE), -1e9)
+    logits[:, :, RX_ID] = rx_logits
+    wall_scores = torch.einsum("btd,bwd->btw", h, wall_embed)
+    wall_scores = wall_scores.masked_fill(wall_mask.unsqueeze(1) < 0.5, -1e9)
+    logits[:, :, VOCAB_WALL_OFFSET : VOCAB_WALL_OFFSET + MAX_WALLS] = wall_scores
+    corner_scores = torch.einsum("btd,bcd->btc", h, corner_embed)
+    corner_scores = corner_scores.masked_fill(corner_mask.unsqueeze(1) < 0.5, -1e9)
+    logits[:, :, VOCAB_DIFFRACT_OFFSET : VOCAB_DIFFRACT_OFFSET + MAX_CORNERS] = corner_scores
+    return logits
+
+
+@torch.no_grad()
+def greedy_decode_interactions(
+    model: nn.Module,
+    channels: torch.Tensor,
+    tx: torch.Tensor,
+    rx: torch.Tensor,
+    wall_feats: torch.Tensor,
+    wall_mask: torch.Tensor,
+    force_first: torch.Tensor | None = None,
+    max_bounces: int = MAX_BOUNCES,
+    corner_feats: torch.Tensor | None = None,
+    corner_mask: torch.Tensor | None = None,
+) -> torch.Tensor:
+    """Greedy AR rollout. ``force_first`` replaces the first interaction when >= 0."""
+    b = channels.size(0)
+    dev = channels.device
+    seq = torch.full((b, MAX_SEQ_LEN), PAD_ID, device=dev, dtype=torch.long)
+    seq[:, 0] = TX_ID
+    finished = torch.zeros(b, dtype=torch.bool, device=dev)
+    cur_len = 1
+    for step in range(max_bounces + 1):
+        logits = model(
+            seq[:, :cur_len],
+            channels,
+            tx,
+            rx,
+            wall_feats,
+            wall_mask,
+            corner_feats,
+            corner_mask,
+        )
+        last = logits[:, -1, :]
+        if step == 0 and force_first is not None:
+            use = force_first >= 0
+            nxt = last.argmax(dim=-1)
+            nxt = torch.where(use, force_first.to(dev), nxt)
+        else:
+            nxt = last.argmax(dim=-1)
+        nxt = torch.where(finished, torch.full_like(nxt, PAD_ID), nxt)
+        seq[:, cur_len] = nxt
+        finished = finished | (nxt == RX_ID) | (nxt == PAD_ID)
+        cur_len += 1
+        if bool(finished.all()):
+            break
+    return seq
+
+
 class TokenMixer(nn.Module):
     """Map a token id to a vector, using wall or corner geometry."""
 
@@ -88,16 +156,14 @@ class ARPathTransformer(nn.Module):
         corner_mask: torch.Tensor,
     ) -> torch.Tensor:
         """h [B,T,d] → vocab logits [B,T,V]."""
-        b, tlen, d = h.shape
-        logits = h.new_full((b, tlen, VOCAB_SIZE), -1e9)
-        logits[:, :, RX_ID] = self.rx_head(h).squeeze(-1)
-        wall_scores = torch.einsum("btd,bwd->btw", h, wall_embed)
-        wall_scores = wall_scores.masked_fill(wall_mask.unsqueeze(1) < 0.5, -1e9)
-        logits[:, :, VOCAB_WALL_OFFSET : VOCAB_WALL_OFFSET + MAX_WALLS] = wall_scores
-        corner_scores = torch.einsum("btd,bcd->btc", h, corner_embed)
-        corner_scores = corner_scores.masked_fill(corner_mask.unsqueeze(1) < 0.5, -1e9)
-        logits[:, :, VOCAB_DIFFRACT_OFFSET : VOCAB_DIFFRACT_OFFSET + MAX_CORNERS] = corner_scores
-        return logits
+        return pointer_logits(
+            h,
+            self.rx_head(h).squeeze(-1),
+            wall_embed,
+            wall_mask,
+            corner_embed,
+            corner_mask,
+        )
 
     def forward(
         self,
@@ -137,37 +203,18 @@ class ARPathTransformer(nn.Module):
         corner_feats: torch.Tensor | None = None,
         corner_mask: torch.Tensor | None = None,
     ) -> torch.Tensor:
-        b = channels.size(0)
-        device = channels.device
-        seq = torch.full((b, MAX_SEQ_LEN), PAD_ID, device=device, dtype=torch.long)
-        seq[:, 0] = TX_ID
-        finished = torch.zeros(b, dtype=torch.bool, device=device)
-        cur_len = 1
-        for step in range(max_bounces + 1):
-            logits = self.forward(
-                seq[:, :cur_len],
-                channels,
-                tx,
-                rx,
-                wall_feats,
-                wall_mask,
-                corner_feats,
-                corner_mask,
-            )
-            last = logits[:, -1, :]
-            if step == 0 and force_first is not None:
-                use = force_first >= 0
-                nxt = last.argmax(dim=-1)
-                nxt = torch.where(use, force_first.to(device), nxt)
-            else:
-                nxt = last.argmax(dim=-1)
-            nxt = torch.where(finished, torch.full_like(nxt, PAD_ID), nxt)
-            seq[:, cur_len] = nxt
-            finished = finished | (nxt == RX_ID) | (nxt == PAD_ID)
-            cur_len += 1
-            if bool(finished.all()):
-                break
-        return seq
+        return greedy_decode_interactions(
+            self,
+            channels,
+            tx,
+            rx,
+            wall_feats,
+            wall_mask,
+            force_first=force_first,
+            max_bounces=max_bounces,
+            corner_feats=corner_feats,
+            corner_mask=corner_mask,
+        )
 
 
 class OneShotPathModel(nn.Module):

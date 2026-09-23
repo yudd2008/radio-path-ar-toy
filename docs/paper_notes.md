@@ -123,6 +123,14 @@ WinProp IRT 文档写明预测阶段会递归检查 **反射/绕射** 条件；�
 
 ---
 
+## 5b. 更强的 Transformer 只作为序列模型对照
+
+仓库里的普通 AR 本身就是一个很小的因果 Transformer。`SeriousPathTransformer` 使用同一套 token、场景特征、seed=0 划分和第一跳干预协议（`experiments.ar_intervention.score_sequence_model`），容量和训练更完整，用来回答「是不是小模型没训够」。它仍然是 \(p(\text{next}\mid\text{prefix},\text{scene})\)，不是可见性树搜索，也不生成镜像法 GT。
+
+本环境按同一生成器重跑 seed=0，得到的多跳测试集是 n=261，与上文 n=204 的已提交表不是同一次抽样；旧表留在 `results/metrics.json`，不在这里改写。配对数字只在 `results/findings.md` 的 Transformer 一节和 `results/transformer_comparison.json`。
+
+那次配对的测量结论（不是另造指标）：不加权的小 AR 在 hop2 上塌成 RX；把 R/D token 的损失权重调到 3 之后，小 AR 的 teacher-forced hop2 与 4 层 Transformer 同一档（约 0.4），free-run exact 都是 0.126。把第一跳改成模型第二候选后，两边 exact 都是 0；随机离开树的第一跳都会把几何合法率从约 0.65 打到约 0.17。更大的 Transformer 没有改变「普通 AR free-run 不适合这些多径序列」这个结论。
+
 ## 6. 明确不做的事
 
 - 不实现 WinProp 的工业预处理数据库、3D、tile 中心近似、完整 UTD 系数或 Keller 锥。
