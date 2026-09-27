@@ -6,7 +6,7 @@
 
 **本次 seed=0 玩具 run 的回答：不适合。**  
 论文上，WinProp IRT 把寻径写成 **可见性树搜索**（交互点钉在 tile/墙上，深度只有少数几跳），不是唯一 next-token 句子；RadioDiff 则说明连续无线电几何应对齐 **条件生成** 而不是纯判别——但那是场图，我们只把该课用在固定离散路径上的连续点。  
-实验上，第一交互是树上的分支选择；改错第一跳后，相对原 GT 的后续墙会垮掉。若错误第一跳仍落在树上，模型会走出**另一条**合法路径（换枝，不是 AR 纠错）；若第一跳是随机墙（离开树），几何合法率从 0.96 掉到 0.15。连续点在离散墙序列给定后由镜像法闭合（oracle 误差 0）。
+实验上（seed=0，与 Transformer 对照同一批 n=261 条 `n_bounces≥2` 路径，token 为 `R_wall_k` / `D_corner_c`）：不加权小 AR 的第二跳几乎总是 RX（TF hop2 0.011）。第一跳换成模型第二候选后 exact 为 0，合法率仍 0.590，且 0.586 落在该场景另一条已枚举枝上；第一跳换成随机已有墙或角点后，合法率从 0.621 掉到 0.157。连续点在离散 R/D 序列给定后由镜像法闭合（oracle xy 误差 0）。交互加权小 AR 与 4 层 Transformer 的同划分对照没有改变这个结论。
 
 对照表见 [`docs/paper_notes.md`](docs/paper_notes.md)；测量见 [`results/findings.md`](results/findings.md)。
 
@@ -142,41 +142,45 @@ PYTHONPATH=. python3 -m experiments.eval_transformer \
 
 测量写在 `results/transformer_comparison.json`、`results/findings.md` 的 Transformer 一节，以及 `results/figures/transformer_vs_ar_hop_accuracy.png`。训练曲线在 `results/figures/transformer_train_curves.png`。超参以 checkpoint 里的 `config` / `train_defaults` 为准。
 
-这次 seed=0 重抽样的测量（n=261 条 `n_bounces≥2` 测试路径，与仓库里旧的 n=204 表不是同一次数据）写在 [`results/findings.md`](results/findings.md)。简要结果：原配方小 AR 的第二跳几乎总是 RX（TF hop2 0.011）。交互 token 加权之后，小 AR 与 4 层 Transformer 的 TF hop2 都在 0.4 左右，free-run exact 都是 0.126；第一跳换成第二候选后 exact 都是 0，随机非法第一跳都会把几何合法率打到约 0.17。更大的 Transformer 没有改变「普通 free-run 不适合这些路径」的结论。Ground truth 仍是镜像法。
+这次 seed=0 的测量（n=261 条 `n_bounces≥2` 测试路径，与 `results/metrics.json` 的离散表是同一次抽样）写在 [`results/findings.md`](results/findings.md)。简要结果：原配方小 AR 的第二跳几乎总是 RX（TF hop2 0.011）。交互 token 加权之后，小 AR 与 4 层 Transformer 的 TF hop2 分别是 0.406 和 0.383，free-run exact 都是 0.126；第一跳换成第二候选后 exact 都是 0，随机非法第一跳把几何合法率打到 0.157 / 0.180 / 0.169（原配方 / 加权 / Transformer）。更大的 Transformer 没有改变「普通 free-run 不适合这些路径」的结论。Ground truth 仍是镜像法。这些 checkpoint 没有重训；普通 AR 在本次数据上按原配方重训与已提交权重逐元素一致。
 
 English: the scientific question is still whether ordinary autoregressive free-run is a fit for multipath interaction sequences. The Transformer is a stronger sequence-model foil under the same data and the same first-hop corruption protocol, not a replacement for the image method. On the fresh seed-0 draw, matching the interaction-token loss weight lets the small AR learn the second hop about as well as the larger Transformer; corrupting the first hop still destroys exact match to the labeled path for both.
 
 样本 schema 见生成后的 `data/generated/schema_example.json`。
 
-## 5. 关键发现（seed=0，n=204 条 n_bounces≥2 的测试路径）
+## 5. 关键发现（seed=0，离散 n=261 条 n_bounces≥2 的测试路径）
 
-完整文字结论见 [`results/findings.md`](results/findings.md)，原始数字见 [`results/metrics.json`](results/metrics.json)。
+完整文字结论见 [`results/findings.md`](results/findings.md)，原始数字见 [`results/metrics.json`](results/metrics.json)。下表是不加权小 AR 和 one-shot。交互加权小 AR 与 Transformer 的同一 n 对照在 findings 的 Transformer 一节。
 
-镜像法 GT（同一峡谷场景里 LoS、两侧 1-bounce、2-bounce ping-pong 同时存在——这就是 IRT 树，不是单一序列）：
+镜像法 GT（峡谷场景里多条反射枝同时存在——这就是 IRT 树，不是单一序列）：
 
 ![GT image-method paths](results/figures/gt_paths_example.png)
 
-同一 NLOS 街区玩具里，**镜面反射与角点绕射画在一张图上**（实线橙 = 反射，虚线紫 = 绕射；图例含 token 序列）：
+同一 NLOS 街区玩具里，**镜面反射与角点绕射画在一张图上**（实线橙 = 反射，虚线紫 = 绕射；图例是 `R_wall_k` / `D_corner_c`）：
 
 ![reflection + diffraction](results/figures/reflect_diffract_showcase.png)
 
-强制改第一跳之后，模型走出**另一条**合法路径（换枝），而不是沿着原 GT 续写：
+这条 GT 是 `TX → R_wall_5 → D_corner_0 → RX`。不加权 AR 的 free-run 停在 `R_wall_5`，把第一跳改成第二候选 `D_corner_0` 之后停在绕射 1-bounce，都不是原来的两跳序列：
 
 ![GT vs AR wrong first interaction](results/figures/example_0_sid20000.png)
 
-| 设定 | 第二墙 vs 这条 GT | 整段 exact | 几何合法 | 落在该场景某条已枚举 GT 分支 |
+| 设定 | 第二交互 vs 这条 GT | 整段 exact | 几何合法 | 落在该场景某条已枚举 GT 分支 |
 | --- | ---: | ---: | ---: | ---: |
-| AR free-run | 0.451 | 0.230 | 0.956 | （free-run 常是某条合法枝） |
-| Oracle 第一墙 + AR 其余 | 0.858 | 0.461 | 0.961 | — |
-| 第一跳 = 模型第二候选，再 AR | **0.020** | **0.000** | 0.956 | **0.941** |
-| 第一跳 = 随机墙，再 AR | 0.358 | 0.000 | **0.147** | 0.147 |
-| One-shot（非 AR） | 0.010 | 0.005 | 0.985 | 短合法枝，对不上这条多跳 GT |
+| AR free-run | 0.000 | 0.000 | 0.621 | 0.621 |
+| Oracle 第一交互 + AR 其余 | 0.011 | 0.011 | 0.598 | 0.575 |
+| 第一跳 = 模型第二候选，再 AR | 0.000 | 0.000 | 0.590 | 0.586 |
+| 第一跳 = 随机已有墙/角点，再 AR | 0.008 | 0.000 | 0.157 | 0.126 |
+| One-shot（非 AR） | 0.000 | 0.000 | 0.636 | 0.613 |
+
+Teacher-forcing 第一跳 0.261，第二跳 0.011（不加权损失把 hop2 收成 RX）。One-shot 第一跳 0.249，第二跳 0.000，exact 0.000。
 
 ![hop accuracy](results/figures/discrete_hop_accuracy.png)
 
 ![exact vs valid](results/figures/discrete_exact_valid.png)
 
-连续点（**离散墙序列给定**）：镜像法 oracle 误差为 0。联合回归 hop1 \(\|\Delta xy\|\approx 0.049\)，后续 0.035；把 \(t_0\) 污染后再做 AR-t，后续 0.053。小 DDPM 后续 0.174，**没有**超过联合回归——这是 CPU 小组件的真实结果，不编造 SOTA。
+连续点（**离散 `R_wall_k` / `D_corner_c` 序列给定**）。图上是与上表相同的 n=261 条路径：镜像法 oracle 的 xy 误差为 0。联合回归 hop1 \(\|\Delta xy\|\approx 0.021\)，后续 0.026；AR-t free-run 后续 0.030；把 \(t_0\) 污染后 hop1 升到 0.063，后续仍是 0.028（后续没有跟着变大）。小 DDPM 后续 0.070，高于联合回归。这是 CPU 小组件、12 步采样的测量。
+
+同一批 test 场景上，连续实验原来的筛选是 n_bounces≥1（LoS 没有交互坐标 t），n=515，不是 261。那一组：联合 hop1 0.023、后续 0.026；AR-t 后续 0.030；污染 \(t_0\) 后续 0.028；DDPM 后续 0.080；oracle xy 0。t 误差只平均反射跳，因为绕射点已经由 `D_corner_c` 钉死。
 
 ![continuous error](results/figures/continuous_error_growth.png)
 
@@ -184,16 +188,16 @@ English: the scientific question is still whether ordinary autoregressive free-r
 
 **不适合把传播路径直接当成普通 autoregressive sequence 来生成。**
 
-**论文理由。** WinProp IRT 把寻径定义成预处理可见性关系上的树搜索：节点是墙/tile，边是可见性，交互点钉在元件上，深度只有少数几跳；第一层（发射端可见元件）是分支选择。镜像/反射条件是 **整段路径** 的全局约束。普通 AR 假设存在一条应对齐的 token 句子、下一步主要由前缀局部决定——与「树 + 全局镜面闭合」不是同一对象。RadioDiff 补充的是连续无线电几何的课：场不该用纯判别逐步回归；本玩具把该课用在 **固定离散结构上的 \(t\)**（联合生成/回归），明确 **不** 生成 RadioDiff 那种 pathloss map。RadioUNet 只提供占用图编码器的上下文。
+**论文理由。** WinProp IRT 把寻径定义成预处理可见性关系上的树搜索：节点是墙/tile 或棱，边是可见性，交互点钉在元件上，深度只有少数几跳；第一层（发射端可见元件）是分支选择。镜像/反射条件是 **整段路径** 的全局约束。普通 AR 假设存在一条应对齐的 token 句子、下一步主要由前缀局部决定——与「树 + 全局镜面闭合」不是同一对象。RadioDiff 补充的是连续无线电几何的课：场不该用纯判别逐步回归；本玩具把该课用在 **固定离散结构上的反射 \(t\)**（联合生成/回归），明确 **不** 生成 RadioDiff 那种 pathloss map。绕射顶点没有自由 \(t\)。RadioUNet 只提供占用图编码器的上下文。
 
-**玩具证据（seed=0，数字未改）：**
+**玩具证据（seed=0，n=261，`R_wall_k` / `D_corner_c`）：**
 
-1. 第一交互是树上的分支选择，不是局部 next-token；相对「这一条」GT，改错第一跳后后续墙准确率从 0.86 掉到 0.02。
-2. 第二候选往往是另一条合法 IRT 枝（合法率仍 ~0.96，且 94% 能在场景枚举集里对上），这是换枝，不是 AR 把原序列修补回来。
-3. 随机墙离开可见性树后，合法率崩溃到 0.15（缺少全局镜像法一致性）。
-4. 连续点在离散结构给定后由几何闭合（oracle 误差 0）；应联合生成/回归，而不是逐步 AR。
+1. 不加权小 AR 的第一跳准确率 0.261，第二跳 0.011。第一交互是分支，而且不加权交叉熵学不会第二跳的反射/绕射 token。
+2. 第一跳换成第二候选后 exact 为 0，合法率 0.590，其中 0.586 是场景里另一条已枚举枝。
+3. 第一跳换成随机已有墙或角点后，合法率从 0.621 掉到 0.157。
+4. 离散结构给定后 oracle xy 误差为 0。同一 261 条路径上，联合回归后续 xy 0.026，小 DDPM 后续 0.070。
 
-Teacher-forcing 第一跳只有 0.46，也说明多路径设定下「一条普通 AR 序列」这个监督本身就是错的。详表与引用见 [`docs/paper_notes.md`](docs/paper_notes.md)。
+交互加权之后，小 AR 的 TF hop2 是 0.406、Transformer 是 0.383，free-run exact 都是 0.126；第二候选后 exact 仍是 0。容量没有把可见性树变成普通句子。详表见 [`results/findings.md`](results/findings.md) 与 [`docs/paper_notes.md`](docs/paper_notes.md)。
 
 ## 6. 许可
 

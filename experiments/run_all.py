@@ -52,7 +52,9 @@ def demo_gt_figure(seed: int, out: Path) -> None:
 
 
 def _token_ids(path) -> str:
-    return ",".join(f"{k}{i}" for k, i in path.interactions) or "LoS"
+    toks = path.tokens()
+    body = [t for t in toks if t not in ("TX", "RX")]
+    return "→".join(body) if body else "LoS"
 
 
 def main():
