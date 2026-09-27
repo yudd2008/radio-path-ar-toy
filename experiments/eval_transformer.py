@@ -222,8 +222,9 @@ def render_findings_section(payload: dict) -> str:
         f"配对测量：seed={payload['seed']}，测试路径 n={int(n_eval)}（`n_bounces≥2`）。"
         "划分是 `generate_dataset` 的 240/50/70 个场景再加每个 split 一个 showcase 场景，与 `experiments.run_all` 相同。"
         "Ground truth 仍是镜像法 + 已有角点绕射规则枚举出的路径。普通 AR 和 Transformer 都不是 GT 生成器。"
-        "本环境重跑 `generate_dataset(seed=0)` 得到的 n 与仓库里先前 commit 的 n=204 表不是同一次抽样，旧表保留在上面，这里不覆盖 `metrics.json`。"
-        "普通 AR 原配方保持 16 epoch、不加权交叉熵。另有一列把同一小架构配上 Transformer 的交互 token 权重和 warmup+cosine，用来分开「损失权重」和「模型容量」。",
+        "这一节与 `results/metrics.json` 的离散表是同一次 `generate_dataset(seed=0)`、同一批 n_bounces≥2 测试路径（`R_wall_k` / `D_corner_c`）。"
+        "普通 AR 原配方保持 16 epoch、不加权交叉熵，checkpoint 未重训（与本次数据上按原配方重训逐权重一致）。"
+        "另有一列把同一小架构配上 Transformer 的交互 token 权重和 warmup+cosine，用来分开「损失权重」和「模型容量」。",
         "",
         "**训练（验证集 teacher-forced next-token accuracy 选 checkpoint）。**",
         (
@@ -352,8 +353,8 @@ def render_findings_section(payload: dict) -> str:
         (
             f"Paired measurement, seed={payload['seed']}, n={int(n_eval)} test paths with "
             "n_bounces≥2. Splits match `experiments.run_all` (240/50/70 scenes plus one "
-            "showcase scene per split, seed 0). This draw is not the previously committed "
-            "n=204 table in `results/metrics.json`; that file is left unchanged. "
+            "showcase scene per split, seed 0) and the discrete table in `results/metrics.json` "
+            "(tokens `R_wall_k` / `D_corner_c`). "
             "Ground truth is still the image-method "
             "enumerator plus the repo's corner-diffraction rules. Neither model generates that ground truth. "
             "Epoch budgets differ on purpose: the ordinary AR keeps this repo's 16-epoch "

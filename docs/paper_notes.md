@@ -115,11 +115,11 @@ WinProp IRT 文档写明预测阶段会递归检查 **反射/绕射** 条件；�
 
 | 主张 | 用哪项已有数字 |
 | --- | --- |
-| 第一跳是树的分支选择，不是唯一 next-token | 第一跳 vs 单条 GT 仅 0.456；同一场景多路径图 |
-| 改错第一跳 → 相对原 GT 的后续墙崩溃 | 第二候选干预：第二墙 0.858→0.020，exact 0.461→0.000 |
-| 落在树上的错第一跳 = 换枝而非 AR 纠错 | 第二候选后合法率仍 0.956，且 0.941 是场景里另一条已枚举 GT 枝 |
-| 离开树（随机墙）→ 几何崩溃 | 合法率 0.956→0.147 |
-| 连续点由离散结构全局闭合 | 镜像法 oracle \(\|\Delta xy\|=0\)；联合回归优于污染 \(t_0\) 后的 AR-t |
+| 第一跳是树的分支选择，不是唯一 next-token | 不加权小 AR，TF hop1 0.261（n=261，`R_wall_k` / `D_corner_c`） |
+| 不加权损失学不会第二跳交互 | TF hop2 0.011，free-run hop2 0.000，exact 0.000 |
+| 落在树上的错第一跳 = 换枝而非 AR 纠错 | 第二候选后 exact 0.000，合法率 0.590（free-run 0.621），0.586 是场景里另一条已枚举 GT 枝 |
+| 离开树（随机已有墙/角点）→ 几何崩溃 | 合法率 0.621→0.157 |
+| 连续点由离散结构全局闭合 | 镜像法 oracle \(\|\Delta xy\|=0\)。同一 261 条路径上联合回归后续 xy 0.026，污染 \(t_0\) 后的 AR-t 后续 0.028，小 DDPM 后续 0.070 |
 
 ---
 
@@ -127,9 +127,9 @@ WinProp IRT 文档写明预测阶段会递归检查 **反射/绕射** 条件；�
 
 仓库里的普通 AR 本身就是一个很小的因果 Transformer。`SeriousPathTransformer` 使用同一套 token、场景特征、seed=0 划分和第一跳干预协议（`experiments.ar_intervention.score_sequence_model`），容量和训练更完整，用来回答「是不是小模型没训够」。它仍然是 \(p(\text{next}\mid\text{prefix},\text{scene})\)，不是可见性树搜索，也不生成镜像法 GT。
 
-本环境按同一生成器重跑 seed=0，得到的多跳测试集是 n=261，与上文 n=204 的已提交表不是同一次抽样；旧表留在 `results/metrics.json`，不在这里改写。配对数字只在 `results/findings.md` 的 Transformer 一节和 `results/transformer_comparison.json`。
+`results/metrics.json` 的离散表与这一节是同一次 `generate_dataset(seed=0)`、同一批 n=261 条 n_bounces≥2 测试路径。连续点在同一批 test 场景上另有 n_bounces≥1 的筛选（n=515，LoS 没有 t）；与离散同一条条路径的误差在 `continuous_n_bounces_ge_2`。配对数字在 `results/findings.md` 的 Transformer 一节和 `results/transformer_comparison.json`。普通 AR、加权 AR、Transformer 的 checkpoint 没有为这次重跑而改训练配方；普通 AR 按原配方重训与已提交权重一致。
 
-那次配对的测量结论（不是另造指标）：不加权的小 AR 在 hop2 上塌成 RX；把 R/D token 的损失权重调到 3 之后，小 AR 的 teacher-forced hop2 与 4 层 Transformer 同一档（约 0.4），free-run exact 都是 0.126。把第一跳改成模型第二候选后，两边 exact 都是 0；随机离开树的第一跳都会把几何合法率从约 0.65 打到约 0.17。更大的 Transformer 没有改变「普通 AR free-run 不适合这些多径序列」这个结论。
+测量结论（不是另造指标）：不加权的小 AR 在 hop2 上塌成 RX（TF hop2 0.011）；把 R/D token 的损失权重调到 3 之后，小 AR 的 teacher-forced hop2 是 0.406，4 层 Transformer 是 0.383，free-run exact 都是 0.126。把第一跳改成模型第二候选后，两边 exact 都是 0；随机离开树的第一跳把几何合法率打到 0.180（加权 AR）和 0.169（Transformer）。更大的 Transformer 没有改变「普通 AR free-run 不适合这些多径序列」这个结论。
 
 ## 6. 明确不做的事
 
